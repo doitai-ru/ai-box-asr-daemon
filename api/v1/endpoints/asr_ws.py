@@ -24,6 +24,7 @@ from models.ws_models import (
 from services.ws_manager import ConnectionManager
 from services.ws_session import AudioSession, SessionState
 from services.ws_handler import MessageRouter, handle_config, handle_ping, handle_status_request
+from services.ws_protocol import normalize_to_ws_message
 from services.ws_metrics import SystemMetricsCollector
 from services.asr_pipeline import process_audio_stream_chunk, process_final_audio
 from Recognizer import get_recognizer, Recognizer
@@ -175,7 +176,11 @@ async def websocket_endpoint(
                     )
                     continue
                 elif message.get("text"):
-                    msg = parse_ws_message(message["text"])
+                    # Автодетект протокола: понимает и новый ({type:...}), и legacy ({config}/{eof})
+                    msg = normalize_to_ws_message(message["text"])
+                    if msg is None:
+                        logger.warning("Unrecognized WS text message from %s", client_id)
+                        continue
                 else:
                     logger.warning("Unknown WS message format for %s: %s", client_id, message)
                     continue

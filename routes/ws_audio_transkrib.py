@@ -1,12 +1,15 @@
 from pydub import AudioSegment
 
 import ujson
+import base64
 import logging
 from config import settings
 import uuid
 from io import BytesIO
 
 from fastapi import APIRouter, WebSocket
+from services.ws_protocol import normalize_to_ws_message
+from models.ws_models import WSConfigMessage, WSAudioMessage, WSEosMessage
 from utils.chunk_doing import find_last_speech_position
 from utils.pre_start_init import audio_buffer, audio_overlap, audio_to_asr, audio_duration,ws_collected_asr_res
 from utils.send_messages import send_messages
@@ -62,30 +65,31 @@ async def websocket(ws: WebSocket,
 
         if isinstance(message, dict) and message.get('text'):
             try:
-                if message.get('text') and 'config' in message.get('text'):
-                    json_cfg = ujson.loads(message.get('text'))['config']
-                    audio_format = json_cfg.get("audio_format", 'pcm16')
-                    sample_rate = json_cfg.get('sample_rate')
-                    wait_null_answers = json_cfg.get('wait_null_answers', wait_null_answers)
-                    do_dialogue = json_cfg.get("do_dialogue", False)
-                    do_punctuation = json_cfg.get("do_punctuation", False)
-                    try:
-                        channel_name = message.get('text').get("channelName")
-                    except Exception as e:
-                        channel_name = "Null"
-                        logger.debug("ChannelName not parsed")
-                    logger.info(f"Task received, config -  {message.get('text')}")
+                # Автодетект протокола: понимает legacy ({config}/{eof}) и новый ({type:...})
+                canonical = normalize_to_ws_message(message.get('text'))
+                if isinstance(canonical, WSConfigMessage):
+                    audio_format = canonical.audio_format
+                    sample_rate = canonical.sample_rate
+                    wait_null_answers = canonical.wait_null_answers
+                    do_dialogue = canonical.do_dialogue
+                    do_punctuation = canonical.do_punctuation
+                    channel_name = canonical.channel_name or "Null"
+                    logger.info(f"Task received, config - sr={sample_rate}, fmt={audio_format}, ch={channel_name}")
                     continue
-
-                elif message.get('text') and 'eof' in message.get('text'):
-                    logger.info(f"EOF received in channel {channel_name}")
+                elif isinstance(canonical, WSEosMessage):
+                    logger.info(f"EOF/EOS received in channel {channel_name}")
                     break
+                elif isinstance(canonical, WSAudioMessage) and canonical.audio_base64:
+                    # Новый протокол с base64-аудио -> превращаем в бинарный кадр, обрабатываем ниже
+                    message = {'bytes': base64.b64decode(canonical.audio_base64)}
                 else:
-                    logger.error(f"Can`t recognise  text part of  message {message.get('text')} in channel {channel_name}")
-
+                    logger.error(f"Can`t recognise text message {message.get('text')} in channel {channel_name}")
+                    continue
             except Exception as e:
                 logger.error(f'Error text message compiling. Message:{message} - error:{e} in channel {channel_name}')
-        elif isinstance(message, dict) and message.get('bytes'):
+                continue
+
+        if isinstance(message, dict) and message.get('bytes'):
             try:
                 # Получаем новый чанк с данными
                 chunk = message.get('bytes')

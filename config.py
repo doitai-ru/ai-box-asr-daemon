@@ -32,6 +32,16 @@ class Settings(BaseSettings):
     PROVIDER: str = "CPU"
     NUM_THREADS: int = 0
 
+    # T-one streaming settings (потоковый риалтайм на /api/v1/asr/ws-stream через нативный T-one)
+    USE_TONE_STREAMING: bool = False        # зарезервировано: занять ли T-one ещё и legacy /ws
+    TONE_DECODER: str = "beam_search"        # "beam_search" (с KenLM) | "greedy"
+    TONE_SAMPLE_RATE: int = 8000             # фиксировано акустической моделью T-one
+    TONE_CHUNK_SAMPLES: int = 2400           # 300 мс @ 8 кГц - фиксированный размер чанка T-one
+    # Гонять акустическую модель T-one на GPU (CUDAExecutionProvider). По умолчанию CPU:
+    # для чанков по 300 мс GPU может быть медленнее из-за оверхеда на копирования/запуск ядра.
+    # Актуально только при PROVIDER in (CUDA, TENSORRT).
+    STREAM_WITH_GPU: bool = False
+
     # HuggingFace Hub settings
     HF_HOME: str = "./models"
 
@@ -130,7 +140,7 @@ class Settings(BaseSettings):
         'CAN_PUNCTUATE', 'PUNCTUATE_WITH_GPU', 'CAN_DIAR',
         'DIAR_WITH_GPU', 'DO_SPEED_SPEECH_CORRECTION',
         'DO_LOCAL_FILE_RECOGNITIONS', 'DELETE_LOCAL_FILE_AFTR_ASR',
-        'HUMAN_FORMAT_MD_FILE',
+        'HUMAN_FORMAT_MD_FILE', 'USE_TONE_STREAMING', 'STREAM_WITH_GPU',
         mode='before'
     )
     @classmethod
@@ -163,6 +173,10 @@ class Settings(BaseSettings):
         # PUNCTUATE_WITH_GPU актуален только при GPU-провайдерах
         if self.PUNCTUATE_WITH_GPU and self.PROVIDER not in ["CUDA", "TENSORRT"]:
             self.PUNCTUATE_WITH_GPU = False
+
+        # STREAM_WITH_GPU (T-one на GPU) актуален только при GPU-провайдерах
+        if self.STREAM_WITH_GPU and self.PROVIDER not in ["CUDA", "TENSORRT"]:
+            self.STREAM_WITH_GPU = False
 
         # Предупреждение о небезопасной CORS-конфигурации в продакшене
         if self.IS_PROD and self.CORS_ORIGINS == ["*"]:
