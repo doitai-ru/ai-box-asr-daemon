@@ -74,6 +74,13 @@ DELETE_LOCAL_FILE_AFTR_ASR = True if int(os.getenv('DELETE_LOCAL_FILE_AFTR_ASR',
 HUMAN_FORMAT_MD_FILE = True if int(os.getenv('HUMAN_FORMAT_MD_FILE', 0)) == 1 else False
 
 
+# T-one streaming settings (настоящий риалтайм на /ws через нативный tone.StreamingCTCPipeline)
+USE_TONE_STREAMING = True if int(os.getenv('USE_TONE_STREAMING', 0)) == 1 else False  # 1 - /ws работает через T-one стрим
+TONE_DECODER = os.getenv('TONE_DECODER', 'beam_search')  # 'beam_search' (с KenLM, точнее) | 'greedy' (без LM, быстрее)
+TONE_SAMPLE_RATE = 8000   # фиксировано акустической моделью T-one
+TONE_CHUNK_SAMPLES = 2400  # 300 мс @ 8 кГц - фиксированный размер чанка T-one
+
+
 AUDIOEXTENTIONS =  [
     # Основные форматы
     '.mp3', '.wav', '.aac', '.ogg', '.flac', '.m4a', '.wma', '.aiff', '.alac',

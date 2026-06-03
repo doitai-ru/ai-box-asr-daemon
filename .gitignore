@@ -7,6 +7,9 @@
 *.md
 /.venv/
 /venv/
+__pycache__/
+*.py[cod]
+/models/hub/
 /models/vosk-model-ru/
 /models/vosk-model-small-streaming-ru/
 /models/giga-am-russian/
@@ -15,5 +18,6 @@
 /models/sherpa-onnx-whisper-large-v3/
 /models/sherpa-onnx-whisper-medium/
 /models/sherpa-onnx-whisper-small/
+/models/sbert_punc_case_ru_onnx/
 /trash/test_data.py
 /.idea/

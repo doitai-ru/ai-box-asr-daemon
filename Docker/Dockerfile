@@ -1,7 +1,10 @@
 # Базовый образ без CUDA и cuDNN
 FROM python:3.12-slim-bullseye
 
+RUN sed -i 's/deb.debian.org/mirror.yandex.ru/g' /etc/apt/sources.list
+
 # Установка зависимостей
+# build-essential/cmake/libboost/libeigen нужны для сборки kenlm (зависимость T-one, beam_search+LM)
 RUN apt-get update && apt-get install -y \
     git \
     git-lfs \
@@ -12,6 +15,10 @@ RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
     jq \
+    build-essential \
+    cmake \
+    libboost-all-dev \
+    libeigen3-dev \
     && rm -rf /var/lib/apt/lists/*  # Очистка кеша apt
 
 RUN git lfs install
@@ -103,8 +110,24 @@ RUN if [ "$PROVIDER" = "TENSORRT" ]; then \
 # Устанавливаем зависимости без кэша
 RUN pip  install --no-cache-dir -r /tmp/app_setup/requirements.txt
 
-# Устанавливаем основное приложени
-RUN echo " Forcing cache invalidation at $(date)" && git clone https://github.com/Sanich137/ASR_FastAPI_WS_RU
+# T-one (потоковый путь /ws-stream). --no-deps, чтобы не затянуть CPU-onnxruntime поверх onnxruntime-gpu.
+# Затем доустанавливаем его зависимости отдельно (kenlm соберётся, build-deps стоят выше).
+RUN pip install --no-cache-dir --no-deps "git+https://github.com/voicekit-team/T-one.git" && \
+    pip install --no-cache-dir pyctcdecode kenlm miniaudio
+
+# Устанавливаем основное приложение из НАШЕГО форка (там есть потоковый путь /ws-stream).
+# Токен передаётся при сборке: --build-arg GIT_TOKEN=<deploy/CI токен с правом read_repository>.
+# Каталог сохраняем как ASR_FastAPI_WS_RU (на него завязаны WORKDIR/PYTHONPATH/VOLUME),
+# .git удаляем, чтобы токен из remote-url не попал в образ.
+ARG GIT_TOKEN
+ARG GIT_REF=main
+RUN echo "Forcing cache invalidation at $(date)" && \
+    git clone --depth 1 --branch "$GIT_REF" \
+      "https://gitlab-ci-token:${GIT_TOKEN}@gl.amulex.ru/amulex/ml-ai/asr.git" ASR_FastAPI_WS_RU && \
+    rm -rf ASR_FastAPI_WS_RU/.git
+
+# Принудительная переустановка нужной версии cuDNN поверх установленной
+RUN pip install --force-reinstall nvidia-cudnn-cu12==9.6.0.74
 
 # COPY . /ASR_FastAPI_WS_RU/
 

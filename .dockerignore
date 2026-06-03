@@ -1,0 +1,13 @@
+venv/
+.venv/
+models/
+__pycache__/
+*.py[cod]
+.git/
+logs/
+trash/
+bench/
+*.log
+.idea/
+local_asr/to_asr/*
+local_asr/after_asr/*

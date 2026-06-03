@@ -20,7 +20,6 @@ from Recognizer.engine.sentensizer import do_sensitizing
 from Recognizer.engine.stream_recognition import simple_recognise
 
 
-@app.websocket("/ws")
 async def websocket(ws: WebSocket):
     wait_null_answers=True
     client_id = uuid.uuid4()
@@ -246,3 +245,9 @@ async def websocket(ws: WebSocket):
     except Exception as e:
         logger.error(f"error clearing globals after NORMAL closing socket - {e} in channel {channel_name}")
     return
+
+
+# /ws занимаем офлайн-обработчиком только когда потоковый T-one выключен
+# (при USE_TONE_STREAMING=1 /ws регистрирует routes/ws_tone_stream.py)
+if not config.USE_TONE_STREAMING:
+    app.websocket("/ws")(websocket)
