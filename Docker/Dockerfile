@@ -17,6 +17,14 @@ RUN apt-get update && apt-get install -y \
     jq \
     && rm -rf /var/lib/apt/lists/*  # Очистка кеша apt
 
+# T-one опционален: сборочные зависимости для kenlm ставим только при WITH_TONE=1
+ARG WITH_TONE=1
+RUN if [ "$WITH_TONE" = "1" ] || [ "$WITH_TONE" = "true" ]; then \
+        apt-get update && \
+        apt-get install -y build-essential cmake libboost-all-dev libeigen3-dev && \
+        rm -rf /var/lib/apt/lists/* ; \
+    fi
+
 RUN git lfs install
 
 # Собираем модели для пунктуации
@@ -67,10 +75,16 @@ RUN curl -L https://github.com/snakers4/silero-vad/raw/v5.0/files/silero_vad.onn
          -o temp_models/VAD_silero_v5/silero_vad.onnx
 RUN test -f temp_models/VAD_silero_v5/silero_vad.onnx || (echo "File download failed!" && exit 1)
 
-# Скачиваем requirements.txt для кэширования зависимостей
-RUN echo "Downloading requirements.txt for caching ... " && \
+# requirements берём из НАШЕГО форка (там добавлены зависимости новой архитектуры:
+# sqlalchemy/aiosqlite/greenlet/email-validator). GIT_TOKEN — токен gl.amulex.ru со
+# scope read_api+read_repository, передаётся при сборке: --build-arg GIT_TOKEN=...
+ARG GIT_TOKEN
+ARG GIT_REF=main
+RUN echo "Downloading requirements.txt from our fork ... " && \
     mkdir -p /tmp/app_setup && \
-    curl -o /tmp/app_setup/requirements.txt https://raw.githubusercontent.com/Sanich137/ASR_FastAPI_WS_RU/main/requirements.txt
+    curl -fsSL -H "PRIVATE-TOKEN: ${GIT_TOKEN}" \
+      "https://gl.amulex.ru/api/v4/projects/amulex%2Fml-ai%2Fasr/repository/files/requirements.txt/raw?ref=${GIT_REF}" \
+      -o /tmp/app_setup/requirements.txt
 
 ## Копируем requirements в временную директорию
 #COPY requirements.txt /tmp/app_setup/requirements.txt
@@ -106,11 +120,23 @@ RUN if [ "$PROVIDER" = "TENSORRT" ]; then \
 # Устанавливаем зависимости без кэша
 RUN pip  install --no-cache-dir -r /tmp/app_setup/requirements.txt
 
+# T-one (потоковый путь /api/v1/asr/ws-stream) — только при WITH_TONE=1.
+# --no-deps, чтобы не затянуть CPU-onnxruntime поверх onnxruntime-gpu; затем зависимости (kenlm соберётся).
+RUN if [ "$WITH_TONE" = "1" ] || [ "$WITH_TONE" = "true" ]; then \
+        pip install --no-cache-dir --no-deps "git+https://github.com/voicekit-team/T-one.git" && \
+        pip install --no-cache-dir pyctcdecode kenlm miniaudio ; \
+    fi
+
 # Принудительная переустановка нужной версии cuDNN поверх установленной для карт на pascal (GTX 1080)
 # RUN pip install --force-reinstall nvidia-cudnn-cu12==9.6.0.74
 
 # Устанавливаем основное приложени
-RUN echo " Forcing cache invalidation at $(date)" && git clone https://github.com/Sanich137/ASR_FastAPI_WS_RU
+# Код приложения — из НАШЕГО форка (там T-one). Каталог сохраняем как ASR_FastAPI_WS_RU
+# (на него завязаны WORKDIR/PYTHONPATH/VOLUME), .git удаляем, чтобы токен не утёк в образ.
+RUN echo " Forcing cache invalidation at $(date)" && \
+    git clone --depth 1 --branch "$GIT_REF" \
+      "https://oauth2:${GIT_TOKEN}@gl.amulex.ru/amulex/ml-ai/asr.git" ASR_FastAPI_WS_RU && \
+    rm -rf ASR_FastAPI_WS_RU/.git
 
 # COPY . /ASR_FastAPI_WS_RU/
 
@@ -152,4 +178,5 @@ WORKDIR /ASR_FastAPI_WS_RU
 
 # Открываем порт и запускаем приложение
 EXPOSE 49153
-CMD ["python3", "main.py"]
+# На старте применяем миграции БД (идемпотентно). Если БД недоступна — не блокируем ASR.
+CMD ["sh", "-c", "alembic upgrade head || echo 'alembic upgrade skipped'; exec python3 main.py"]
