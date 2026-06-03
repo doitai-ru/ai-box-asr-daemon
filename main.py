@@ -146,6 +146,21 @@ async def lifespan(app):
             settings.CAN_DIAR = False
             logger.warning("Диаризация недоступна: модель не найдена и не удалось скачать")
 
+    # Инициируем потоковый движок T-one заранее (готов сразу после старта,
+    # первый коннект на /api/v1/asr/ws-stream не ловит задержку загрузки модели).
+    try:
+        import numpy as _np
+        from Recognizer.tone_engine import get_tone_pipeline
+        app.state.tone_pipeline = get_tone_pipeline()
+        # Прогрев инференса одним кадром тишины (аллокация/JIT), чтобы первый чанк был быстрым
+        _warm = _np.zeros(settings.TONE_CHUNK_SAMPLES, dtype=_np.int32)
+        _, _st = app.state.tone_pipeline.forward(_warm, None, is_last=True)
+        app.state.tone_pipeline.finalize(_st)
+        logger.info("Потоковый движок T-one готов (прогрет)")
+    except Exception as exc:
+        app.state.tone_pipeline = None
+        logger.error("Не удалось инициализировать T-one на старте: %s", exc)
+
     if settings.DO_LOCAL_FILE_RECOGNITIONS:
         observer_thread = threading.Thread(
             target=lambda: start_file_watcher(file_path=str(paths.get("local_recognition_folder"))),
@@ -176,6 +191,8 @@ async def lifespan(app):
         del app.state.punctuator
     if hasattr(app.state, "diarizer"):
         del app.state.diarizer
+    if hasattr(app.state, "tone_pipeline"):
+        del app.state.tone_pipeline
 
 
 app = FastAPI(

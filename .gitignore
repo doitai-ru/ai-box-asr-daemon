@@ -20,3 +20,13 @@
 .aider*
 /.continue/
 .env
+
+# runtime / cache / dev
+__pycache__/
+*.py[cod]
+*.db
+asr_local.db
+/logs/
+/bench/
+/models/hub/
+/models/sbert_punc_case_ru_onnx/
