@@ -60,3 +60,4 @@ email-validator
 sqlalchemy~=2.0
 aiosqlite
 greenlet
+alembic
