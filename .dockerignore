@@ -16,6 +16,7 @@ local_asr/after_asr/*
 # ВАЖНО: исключаем только подкаталоги весов, НЕ python-пакет models/*.py (ws_models.py и т.д.).
 models/hub/
 models/xet/
+models/tone/
 models/VAD_silero_v5/
 models/sbert_punc_case_ru_onnx/
 models/DIARISATION_model/
