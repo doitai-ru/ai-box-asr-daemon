@@ -1,6 +1,5 @@
 venv/
 .venv/
-models/
 __pycache__/
 *.py[cod]
 .git/
@@ -9,8 +8,15 @@ trash/
 bench/
 *.log
 *.db
-asr_local.db
 .idea/
-.dockerignore
 local_asr/to_asr/*
 local_asr/after_asr/*
+
+# Веса моделей — монтируются с хоста / качаются в рантайме.
+# ВАЖНО: исключаем только подкаталоги весов, НЕ python-пакет models/*.py (ws_models.py и т.д.).
+models/hub/
+models/xet/
+models/VAD_silero_v5/
+models/sbert_punc_case_ru_onnx/
+models/DIARISATION_model/
+models/*.onnx
