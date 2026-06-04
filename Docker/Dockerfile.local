@@ -51,6 +51,9 @@ ENV PYTHONPATH=/ASR_FastAPI_WS_RU \
     LOGGING_LEVEL=INFO
 
 WORKDIR /ASR_FastAPI_WS_RU
-EXPOSE 49153
+ARG PORT=49153
+ENV PORT=${PORT}
+EXPOSE ${PORT}
 # На старте применяем миграции БД (идемпотентно). Если БД недоступна — не блокируем ASR.
-CMD ["sh", "-c", "alembic upgrade head || echo 'alembic upgrade skipped'; exec python3 main.py"]
+# PYTHONPATH= для alembic: локальная папка alembic/ не должна затенять пакет alembic
+CMD ["sh", "-c", "PYTHONPATH= alembic upgrade head || echo 'alembic upgrade skipped'; exec python3 main.py"]
