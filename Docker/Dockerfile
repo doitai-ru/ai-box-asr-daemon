@@ -176,7 +176,12 @@ VOLUME ["/ASR_FastAPI_WS_RU/logs", \
 
 WORKDIR /ASR_FastAPI_WS_RU
 
-# Открываем порт и запускаем приложение
-EXPOSE 49153
+# Порт параметризуется: --build-arg PORT=49153 (или -e PORT=... при запуске).
+# Приложение слушает settings.PORT (= env PORT).
+ARG PORT=49153
+ENV PORT=${PORT}
+EXPOSE ${PORT}
 # На старте применяем миграции БД (идемпотентно). Если БД недоступна — не блокируем ASR.
-CMD ["sh", "-c", "alembic upgrade head || echo 'alembic upgrade skipped'; exec python3 main.py"]
+# PYTHONPATH= для alembic: локальная папка alembic/ не должна затенять пакет alembic
+# (env.py подхватит проект через prepend_sys_path=. из alembic.ini).
+CMD ["sh", "-c", "PYTHONPATH= alembic upgrade head || echo 'alembic upgrade skipped'; exec python3 main.py"]
