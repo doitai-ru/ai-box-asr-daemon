@@ -16,6 +16,18 @@ TENSORRT_providers = ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPU
 CUDA_providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
 CPU_providers = ["CPUExecutionProvider"]
 
+# Ограничители арены CUDA, чтобы видеопамять не росла неограниченно при переменной длине входа
+# (как уже сделано в диаризации/VAD). kSameAsRequested выделяет ровно нужное, без over-allocation.
+CUDA_EP_OPTIONS = {
+    "arena_extend_strategy": "kSameAsRequested",
+    "do_copy_in_default_stream": True,
+}
+
+
+def _with_cuda_options(providers):
+    """Навешивает арена-опции на CUDAExecutionProvider; остальные провайдеры (строки) не трогаем."""
+    return [(p, CUDA_EP_OPTIONS) if p == "CUDAExecutionProvider" else p for p in providers]
+
 
 
 class Recognizer:
@@ -79,7 +91,7 @@ class Recognizer:
         session_options = ort.SessionOptions()
         session_options.log_severity_level = 4  # Выключаем подробный лог
         session_options.enable_profiling = False
-        session_options.enable_mem_pattern = True  # True в диаризации
+        session_options.enable_mem_pattern = False  # для переменной длины входа меньше переплан/рост памяти
         session_options.enable_mem_reuse = True  # True в диаризации
         session_options.enable_cpu_mem_arena = True  # True в диаризации
         session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
@@ -90,16 +102,16 @@ class Recognizer:
 
 
         preprocessor_settings = PreprocessorRuntimeConfig()
-        preprocessor_settings.update({"providers":CPU_providers if self.cpu_preprocessing else self.preprocessor_providers})
+        preprocessor_settings.update({"providers":CPU_providers if self.cpu_preprocessing else _with_cuda_options(self.preprocessor_providers)})
         preprocessor_settings.update({"sess_options":session_options})
         preprocessor_settings.update({"max_concurrent_workers":multiprocessing.cpu_count()})
 
         resampler_settings = OnnxSessionOptions()
-        resampler_settings.update({"providers":CPU_providers if self.cpu_preprocessing else self.resampler_providers})
+        resampler_settings.update({"providers":CPU_providers if self.cpu_preprocessing else _with_cuda_options(self.resampler_providers)})
         resampler_settings.update({"sess_options":session_options})
 
         self._recognizer = onnx_asr.load_model(model=self.model_name,
-                                         providers=self.encoding_providers,
+                                         providers=_with_cuda_options(self.encoding_providers),
                                          sess_options=session_options,
                                          preprocessor_config=preprocessor_settings,
                                          resampler_config=resampler_settings,
