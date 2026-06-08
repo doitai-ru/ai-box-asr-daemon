@@ -10,6 +10,10 @@ T-one ест ровно settings.TONE_CHUNK_SAMPLES (2400) семплов int32 
     start/end, а T-one даёт только границы фразы).
 """
 
+import asyncio
+import functools
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 import soxr
 
@@ -111,3 +115,36 @@ def phrase_to_data(phrase) -> dict:
         "result": phrase_to_words(phrase.text, phrase.start_time, phrase.end_time),
         "text": phrase.text,
     }
+
+
+def make_tone_executor(max_workers: int) -> ThreadPoolExecutor:
+    """
+    Выделенный пул под инференс T-one (вне event-loop'а).
+
+    Имя потоков 'tone*' — чтобы offload было видно в логах/трейсах. Значение
+    клампится к >= 1 (на случай некорректного TONE_INFER_WORKERS из окружения).
+    """
+    return ThreadPoolExecutor(
+        max_workers=max(1, int(max_workers)),
+        thread_name_prefix="tone",
+    )
+
+
+async def forward_async(executor, pipeline, samples, state, *, is_last: bool = False):
+    """
+    Выполняет pipeline.forward(samples, state, is_last=...) в выделенном executor'е.
+
+    Снимает синхронный инференс с event-loop'а. Вызовы на один коннект await'ятся
+    по очереди — порядок прокидывания state сохраняется.
+    """
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        executor,
+        functools.partial(pipeline.forward, samples, state, is_last=is_last),
+    )
+
+
+async def finalize_async(executor, pipeline, state):
+    """Выполняет pipeline.finalize(state) в выделенном executor'е (вне event-loop'а)."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(executor, pipeline.finalize, state)
