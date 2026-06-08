@@ -146,6 +146,16 @@ RUN mkdir -p ASR_FastAPI_WS_RU/models && \
     rm -rf temp_models && \
     rm -rf /tmp/app_setup
 
+# Запекаем модель T-one в {HF_HOME}/tone (скачиваем ЗДЕСЬ; рантайм только грузит from_local).
+# Отдельный каталог tone (не hub) — чтобы бинд-маунт hub его не перекрывал.
+# greedy -> только model.onnx (~150 МБ); beam_search -> ещё kenlm.bin (~5.5 ГБ).
+ARG TONE_DECODER=beam_search
+ENV TONE_DECODER=${TONE_DECODER}
+RUN if [ "$WITH_TONE" = "1" ] || [ "$WITH_TONE" = "true" ]; then \
+        HF_HOME=/tmp/hfcache python3 -c "import os; from tone import StreamingCTCPipeline; d='/ASR_FastAPI_WS_RU/models/tone'; os.makedirs(d, exist_ok=True); StreamingCTCPipeline.download_from_hugging_face(d, only_acoustic=('$TONE_DECODER'=='greedy'))" && \
+        rm -rf /tmp/hfcache ; \
+    fi
+
 
 
 # Установка переменных окружения и даём возможность менять модель диаризации, ASR на этапе сборки.

@@ -18,6 +18,7 @@ from core.logging_config import setup_logging, request_id_var
 from core.exception_handlers import register_exception_handlers
 from utils.files_whatcher import start_file_watcher
 from utils.pre_start_init import paths
+from utils.tone_stream import make_tone_executor
 import threading
 from VoiceActivityDetector import vad
 
@@ -161,6 +162,11 @@ async def lifespan(app):
         app.state.tone_pipeline = None
         logger.error("Не удалось инициализировать T-one на старте: %s", exc)
 
+    # Выделенный исполнитель под инференс T-one (вне event-loop'а): поток /ws-stream
+    # не должен голодить loop, иначе uvicorn рвёт сокеты каскадом (keepalive 1011).
+    app.state.tone_executor = make_tone_executor(settings.TONE_INFER_WORKERS)
+    logger.info("T-one executor создан (workers=%s)", settings.TONE_INFER_WORKERS)
+
     if settings.DO_LOCAL_FILE_RECOGNITIONS:
         observer_thread = threading.Thread(
             target=lambda: start_file_watcher(file_path=str(paths.get("local_recognition_folder"))),
@@ -183,6 +189,11 @@ async def lifespan(app):
     if hasattr(app.state, "ws_manager"):
         app.state.ws_manager.stop_status_broadcast()
         await app.state.ws_manager.disconnect_all()
+
+    # Останавливаем offload-исполнитель T-one
+    if hasattr(app.state, "tone_executor"):
+        app.state.tone_executor.shutdown(wait=True)
+        logger.debug("T-one executor остановлен")
 
     # cleanup (если нужно)
     if hasattr(app.state, "recognizer"):

@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     # для чанков по 300 мс GPU может быть медленнее из-за оверхеда на копирования/запуск ядра.
     # Актуально только при PROVIDER in (CUDA, TENSORRT).
     STREAM_WITH_GPU: bool = False
+    # Число потоков-воркеров под инференс T-one (вынос инференса с event-loop'а
+    # в отдельный исполнитель). 1 - безопасный дефолт: минимум конкуренции за GIL
+    # с event-loop'ом, keepalive не голодает. При greedy-декодере можно поднять;
+    # параллелизм beam-search всё равно ограничен GIL (честное масштабирование -
+    # это мультипроцесс/процесс-на-карту, отдельный этап).
+    TONE_INFER_WORKERS: int = 1
 
     # HuggingFace Hub settings
     HF_HOME: str = "./models"
