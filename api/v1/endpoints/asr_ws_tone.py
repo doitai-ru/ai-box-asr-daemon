@@ -30,7 +30,7 @@ from models.ws_models import (
 )
 from services.ws_manager import ConnectionManager
 from services.ws_protocol import detect
-from utils.tone_stream import take_frames, flush_tail, phrase_to_data, StreamResampler
+from utils.tone_stream import take_frames, flush_tail, phrase_to_data, StreamResampler, forward_async, finalize_async
 from Recognizer.tone_engine import get_tone_pipeline
 
 router = APIRouter(prefix="/asr", tags=["ASR"])
@@ -57,6 +57,7 @@ async def websocket_tone_stream(websocket: WebSocket):
 
     # Предзагруженный в lifespan движок (готов сразу после старта); фолбэк - ленивая загрузка
     pipeline = getattr(websocket.app.state, "tone_pipeline", None) or get_tone_pipeline()
+    executor = websocket.app.state.tone_executor
     state = None
     buf = bytearray()
     channel_name = "Null"
@@ -97,7 +98,7 @@ async def websocket_tone_stream(websocket: WebSocket):
                 buf.extend(resampler.process(evt.audio or b""))
                 try:
                     for samples in take_frames(buf):
-                        phrases, state = pipeline.forward(samples, state)
+                        phrases, state = await forward_async(executor, pipeline, samples, state)
                         for phrase in phrases:
                             if phrase.text:
                                 await manager.send_message(client_id, _result_message(phrase, channel_name))
@@ -118,9 +119,9 @@ async def websocket_tone_stream(websocket: WebSocket):
             tail = flush_tail(buf)
             final_phrases = []
             if tail is not None:
-                phrases, state = pipeline.forward(tail, state, is_last=True)
+                phrases, state = await forward_async(executor, pipeline, tail, state, is_last=True)
                 final_phrases.extend(phrases)
-            fin_phrases, state = pipeline.finalize(state)
+            fin_phrases, state = await finalize_async(executor, pipeline, state)
             final_phrases.extend(fin_phrases)
             final_phrases = [p for p in final_phrases if p.text]
             # все, кроме последней, шлём обычными; последнюю пометим last_message

@@ -100,3 +100,75 @@ def test_finalize_async_runs_off_caller_thread():
     assert phrases == ["final"]
     assert state == "state-after-finalize"
     assert pipe.calls[0][0].startswith("tone")
+
+
+# ── Task 4: проводка WS-обработчика через executor ──────────────────────────
+
+def test_ws_stream_offloads_inference_via_executor(monkeypatch):
+    """Обработчик зовёт forward_async/finalize_async с app.state.tone_executor."""
+    import api.v1.endpoints.asr_ws_tone as mod
+
+    class Evt:
+        def __init__(self, kind, audio=b"", sample_rate=8000, channel_name="Null"):
+            self.kind = kind
+            self.audio = audio
+            self.sample_rate = sample_rate
+            self.channel_name = channel_name
+
+    # config(8 кГц) -> один полный кадр T-one -> disconnect
+    frame = b"\x00" * (mod.settings.TONE_CHUNK_SAMPLES * 2)
+    events = [Evt("config", sample_rate=8000), Evt("audio", audio=frame), Evt("disconnect")]
+
+    class FakeWS:
+        def __init__(self, app):
+            self.app = app
+            self._it = iter(events)
+
+        async def receive(self):
+            return next(self._it)
+
+    class FakeManager:
+        def __init__(self):
+            self.sent = []
+
+        async def connect(self, ws, cid):
+            return True
+
+        async def send_message(self, cid, msg):
+            self.sent.append(msg)
+
+        async def disconnect(self, cid):
+            pass
+
+    sentinel_executor = object()
+    sentinel_pipeline = object()
+
+    app = type("App", (), {})()
+    app.state = type("State", (), {})()
+    app.state.tone_pipeline = sentinel_pipeline
+    app.state.tone_executor = sentinel_executor
+    app.state.ws_manager = FakeManager()
+
+    forward_calls = []
+    finalize_calls = []
+
+    async def fake_forward_async(executor, pipeline, samples, state, *, is_last=False):
+        forward_calls.append((executor, pipeline, is_last))
+        return ([], "state1")
+
+    async def fake_finalize_async(executor, pipeline, state):
+        finalize_calls.append((executor, pipeline))
+        return ([], "state2")
+
+    monkeypatch.setattr(mod, "detect", lambda m: m)              # полученный Evt и есть событие
+    monkeypatch.setattr(mod, "forward_async", fake_forward_async)
+    monkeypatch.setattr(mod, "finalize_async", fake_finalize_async)
+
+    asyncio.run(mod.websocket_tone_stream(FakeWS(app)))
+
+    assert len(forward_calls) == 1                               # один кадр -> один forward
+    assert forward_calls[0][0] is sentinel_executor             # использован app.state.tone_executor
+    assert forward_calls[0][1] is sentinel_pipeline
+    assert forward_calls[0][2] is False
+    assert len(finalize_calls) == 1                             # финализация тоже offload'ится
+    assert finalize_calls[0][0] is sentinel_executor
