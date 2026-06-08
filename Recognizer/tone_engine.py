@@ -21,14 +21,7 @@ logger = logging.getLogger(__name__)
 
 _pipeline = None
 
-# Арена-опции CUDA, чтобы видеопамять не росла неограниченно (kSameAsRequested = без over-allocation)
-CUDA_PROVIDERS = [
-    ("CUDAExecutionProvider", {
-        "arena_extend_strategy": "kSameAsRequested",
-        "do_copy_in_default_stream": True,
-    }),
-    "CPUExecutionProvider",
-]
+CUDA_PROVIDERS = ["CUDAExecutionProvider", "CPUExecutionProvider"]
 
 
 def _model_dir() -> str:
