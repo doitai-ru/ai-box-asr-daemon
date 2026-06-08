@@ -16,6 +16,7 @@ WebSocket-роут /api/v1/asr/ws-stream — НАСТОЯЩИЙ потоковы
   - БД не используется (в отличие от asr_ws.py) — эндпоинт независим от наличия таблиц.
 """
 
+import asyncio
 import logging
 import uuid
 
@@ -49,6 +50,13 @@ def _result_message(phrase, channel_name: str, last: bool = False) -> WSResultMe
 
 @router.websocket("/ws-stream")
 async def websocket_tone_stream(websocket: WebSocket):
+    """
+    Приём потока развязан с инференсом: задача reader всегда дренирует сокет
+    (контрол — config/ping/eos — обрабатывается сразу, аудио-кадры кладутся в
+    очередь без блокировки), задача inferer отдельно гонит T-one и шлёт фразы.
+    Так пока коннект ждёт инференс, его сокет продолжает читаться -> pong'и
+    вычитываются -> uvicorn не рвёт коннект по keepalive (1011) под нагрузкой.
+    """
     manager: ConnectionManager = websocket.app.state.ws_manager
     client_id = str(uuid.uuid4())
 
@@ -58,90 +66,116 @@ async def websocket_tone_stream(websocket: WebSocket):
     # Предзагруженный в lifespan движок (готов сразу после старта); фолбэк - ленивая загрузка
     pipeline = getattr(websocket.app.state, "tone_pipeline", None) or get_tone_pipeline()
     executor = websocket.app.state.tone_executor
-    state = None
-    buf = bytearray()
-    channel_name = "Null"
-    resampler = StreamResampler(settings.TONE_SAMPLE_RATE)  # проходной, пока не пришёл config
 
-    logger.debug("[tone] new stream %s", client_id)
+    audio_q: asyncio.Queue = asyncio.Queue()  # элементы (samples, is_last); None — сентинел конца
+    send_lock = asyncio.Lock()                # сериализация отправки (reader-pong vs inferer-фразы)
+    ctx = {"channel": "Null"}                 # channel_name, общий reader -> inferer
 
-    try:
-        while True:
-            try:
-                message = await websocket.receive()
-            except Exception as exc:
-                logger.debug("[tone] receive error %s: %s", client_id, exc)
-                break
+    async def send(message) -> None:
+        # Отправка атомарна: Starlette не любит конкурентный send из двух задач.
+        async with send_lock:
+            await manager.send_message(client_id, message)
 
-            evt = detect(message)
-
-            if evt.kind == "disconnect":
-                logger.info("[tone] disconnect %s (%s)", channel_name, client_id)
-                break
-
-            if evt.kind == "config":
-                channel_name = evt.channel_name or "Null"
-                sr = evt.sample_rate or settings.TONE_SAMPLE_RATE
-                resampler = StreamResampler(sr)
-                if sr != settings.TONE_SAMPLE_RATE:
-                    logger.info("[tone] %s: sample_rate=%s, включён ресемплинг к 8 кГц", channel_name, sr)
-                logger.info("[tone] config received for channel %s", channel_name)
-                continue
-
-            if evt.kind == "ping":
-                await manager.send_message(client_id, WSPongMessage())
-                continue
-
-            if evt.kind == "audio":
-                # Время T-one считается по объёму поданного аудио (от первого пакета),
-                # ресемплинг сохраняет длительность — метки остаются корректными.
-                buf.extend(resampler.process(evt.audio or b""))
-                try:
-                    for samples in take_frames(buf):
-                        phrases, state = await forward_async(executor, pipeline, samples, state)
-                        for phrase in phrases:
-                            if phrase.text:
-                                await manager.send_message(client_id, _result_message(phrase, channel_name))
-                except Exception as exc:
-                    logger.error("[tone] recognize error %s (%s): %s", channel_name, client_id, exc)
-                continue
-
-            if evt.kind == "eos":
-                logger.info("[tone] EOS for channel %s", channel_name)
-                break
-
-            # evt.kind == "ignore" — молча пропускаем
-
-        # --- финализация: дослать хвост ресемплера и буфера, закрыть фразы ---
-        last_phrase = None
+    async def reader() -> None:
+        """Дренирует сокет: контрол сразу, аудио-кадры -> очередь (без блокировки на инференсе)."""
+        buf = bytearray()
+        resampler = StreamResampler(settings.TONE_SAMPLE_RATE)  # проходной, пока не пришёл config
         try:
-            buf.extend(resampler.process(b"", last=True))
-            tail = flush_tail(buf)
-            final_phrases = []
-            if tail is not None:
-                phrases, state = await forward_async(executor, pipeline, tail, state, is_last=True)
+            while True:
+                try:
+                    message = await websocket.receive()
+                except Exception as exc:
+                    logger.debug("[tone] receive error %s: %s", client_id, exc)
+                    break
+
+                evt = detect(message)
+
+                if evt.kind == "disconnect":
+                    logger.info("[tone] disconnect %s (%s)", ctx["channel"], client_id)
+                    break
+
+                if evt.kind == "config":
+                    ctx["channel"] = evt.channel_name or "Null"
+                    sr = evt.sample_rate or settings.TONE_SAMPLE_RATE
+                    resampler = StreamResampler(sr)
+                    if sr != settings.TONE_SAMPLE_RATE:
+                        logger.info("[tone] %s: sample_rate=%s, включён ресемплинг к 8 кГц", ctx["channel"], sr)
+                    logger.info("[tone] config received for channel %s", ctx["channel"])
+                    continue
+
+                if evt.kind == "ping":
+                    await send(WSPongMessage())  # сразу, не за инференсом -> keepalive жив
+                    continue
+
+                if evt.kind == "audio":
+                    # Время T-one считается по объёму поданного аудио (от первого пакета),
+                    # ресемплинг сохраняет длительность — метки остаются корректными.
+                    buf.extend(resampler.process(evt.audio or b""))
+                    for samples in take_frames(buf):
+                        audio_q.put_nowait((samples, False))  # без блокировки: сокет дренируется дальше
+                    continue
+
+                if evt.kind == "eos":
+                    logger.info("[tone] EOS for channel %s", ctx["channel"])
+                    break
+
+                # evt.kind == "ignore" — молча пропускаем
+        finally:
+            # Дослать хвост ресемплера/буфера как is_last-кадр, затем сентинел конца.
+            try:
+                buf.extend(resampler.process(b"", last=True))
+                tail = flush_tail(buf)
+                if tail is not None:
+                    audio_q.put_nowait((tail, True))
+            except Exception as exc:
+                logger.error("[tone] flush tail error %s (%s): %s", ctx["channel"], client_id, exc)
+            audio_q.put_nowait(None)  # сентинел: inferer финализирует и завершится
+
+    async def inferer() -> None:
+        """Потребляет очередь: forward -> партиалы; на сентинеле — finalize + финальный last_message."""
+        state = None
+        final_phrases = []
+        while True:
+            item = await audio_q.get()
+            if item is None:
+                break
+            samples, is_last = item
+            try:
+                phrases, state = await forward_async(executor, pipeline, samples, state, is_last=is_last)
+            except Exception as exc:
+                logger.error("[tone] recognize error %s (%s): %s", ctx["channel"], client_id, exc)
+                continue
+            if is_last:
                 final_phrases.extend(phrases)
+            else:
+                for phrase in phrases:
+                    if phrase.text:
+                        await send(_result_message(phrase, ctx["channel"]))
+
+        # --- финализация ---
+        try:
             fin_phrases, state = await finalize_async(executor, pipeline, state)
             final_phrases.extend(fin_phrases)
-            final_phrases = [p for p in final_phrases if p.text]
-            # все, кроме последней, шлём обычными; последнюю пометим last_message
-            for p in final_phrases[:-1]:
-                await manager.send_message(client_id, _result_message(p, channel_name))
-            if final_phrases:
-                last_phrase = final_phrases[-1]
         except Exception as exc:
-            logger.error("[tone] finalize error %s (%s): %s", channel_name, client_id, exc)
+            logger.error("[tone] finalize error %s (%s): %s", ctx["channel"], client_id, exc)
 
-        if last_phrase is not None:
-            await manager.send_message(client_id, _result_message(last_phrase, channel_name, last=True))
+        final_phrases = [p for p in final_phrases if p.text]
+        for p in final_phrases[:-1]:
+            await send(_result_message(p, ctx["channel"]))
+        if final_phrases:
+            await send(_result_message(final_phrases[-1], ctx["channel"], last=True))
         else:
-            await manager.send_message(client_id, WSResultMessage(
+            await send(WSResultMessage(
                 type=WSMessageType.final_result,
-                channel_name=channel_name,
+                channel_name=ctx["channel"],
                 silence=True,
                 data=WSRecognitionData(),
                 last_message=True,
             ))
+
+    logger.debug("[tone] new stream %s", client_id)
+    try:
+        await asyncio.gather(reader(), inferer())
     finally:
         await manager.disconnect(client_id)
-        logger.info("[tone] closed %s (%s)", channel_name, client_id)
+        logger.info("[tone] closed %s (%s)", ctx["channel"], client_id)
