@@ -172,3 +172,79 @@ def test_ws_stream_offloads_inference_via_executor(monkeypatch):
     assert forward_calls[0][2] is False
     assert len(finalize_calls) == 1                             # финализация тоже offload'ится
     assert finalize_calls[0][0] is sentinel_executor
+
+
+def test_ws_stream_answers_ping_while_inference_blocked(monkeypatch):
+    """Развязка приём<->инференс: reader отвечает pong, пока inferer завис на forward (бэклог)."""
+    import api.v1.endpoints.asr_ws_tone as mod
+
+    class Evt:
+        def __init__(self, kind, audio=b"", sample_rate=8000, channel_name="Null"):
+            self.kind = kind
+            self.audio = audio
+            self.sample_rate = sample_rate
+            self.channel_name = channel_name
+
+    frame = b"\x00" * (mod.settings.TONE_CHUNK_SAMPLES * 2)
+    sent = []
+
+    monkeypatch.setattr(mod, "detect", lambda m: m)  # полученный Evt и есть событие
+
+    async def scenario():
+        release = asyncio.Event()
+
+        async def blocking_forward(executor, pipeline, samples, state, *, is_last=False):
+            await release.wait()           # имитируем затык инференса (очередь к воркеру)
+            return ([], state)
+
+        async def fake_finalize(executor, pipeline, state):
+            return ([], state)
+
+        monkeypatch.setattr(mod, "forward_async", blocking_forward)
+        monkeypatch.setattr(mod, "finalize_async", fake_finalize)
+
+        in_q = asyncio.Queue()
+
+        class FakeWS:
+            def __init__(self, app):
+                self.app = app
+
+            async def receive(self):
+                return await in_q.get()
+
+        class FakeManager:
+            async def connect(self, ws, cid):
+                return True
+
+            async def send_message(self, cid, msg):
+                sent.append(msg)
+
+            async def disconnect(self, cid):
+                pass
+
+        app = type("App", (), {})()
+        app.state = type("State", (), {})()
+        app.state.tone_pipeline = object()
+        app.state.tone_executor = object()
+        app.state.ws_manager = FakeManager()
+
+        task = asyncio.create_task(mod.websocket_tone_stream(FakeWS(app)))
+        await in_q.put(Evt("config", sample_rate=8000))
+        await in_q.put(Evt("audio", audio=frame))   # inferer заблокируется на forward
+        await in_q.put(Evt("ping"))                  # должен быть отвечен reader'ом, не за инференсом
+
+        got_pong = False
+        for _ in range(50):
+            await asyncio.sleep(0.005)
+            if any(isinstance(m, mod.WSPongMessage) for m in sent):
+                got_pong = True
+                break
+        assert got_pong, "pong не пришёл, пока инференс заблокирован — развязка не работает"
+
+        # чистое завершение
+        release.set()
+        await in_q.put(Evt("disconnect"))
+        await asyncio.wait_for(task, timeout=5)
+
+    asyncio.run(scenario())
+    assert any(getattr(m, "last_message", False) for m in sent)  # финальный last_message пришёл
