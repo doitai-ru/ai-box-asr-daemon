@@ -45,6 +45,16 @@ COPY . /ASR_FastAPI_WS_RU/
 # Каталоги, обязательные на старте (логи; иначе TimedRotatingFileHandler падает)
 RUN mkdir -p /ASR_FastAPI_WS_RU/logs /ASR_FastAPI_WS_RU/local_asr/to_asr /ASR_FastAPI_WS_RU/local_asr/after_asr
 
+# Запекаем модель T-one в {HF_HOME}/tone (скачиваем ЗДЕСЬ, в образе; рантайм только грузит from_local).
+# Отдельный каталог tone (не hub) — чтобы бинд-маунт hub его не перекрывал.
+# greedy -> только model.onnx (~150 МБ); beam_search -> ещё kenlm.bin (~5.5 ГБ).
+ARG TONE_DECODER=beam_search
+ENV TONE_DECODER=${TONE_DECODER}
+RUN if [ "$WITH_TONE" = "1" ] || [ "$WITH_TONE" = "true" ]; then \
+        HF_HOME=/tmp/hfcache python3 -c "import os; from tone import StreamingCTCPipeline; d='/ASR_FastAPI_WS_RU/models/tone'; os.makedirs(d, exist_ok=True); StreamingCTCPipeline.download_from_hugging_face(d, only_acoustic=('$TONE_DECODER'=='greedy'))" && \
+        rm -rf /tmp/hfcache ; \
+    fi
+
 ENV PYTHONPATH=/ASR_FastAPI_WS_RU \
     HF_HOME=/ASR_FastAPI_WS_RU/models \
     IS_PROD=1 \
