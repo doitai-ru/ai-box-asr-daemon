@@ -106,12 +106,17 @@ class Recognizer:
                                          ).with_timestamps()
 
         try:
-            audio = np.random.randn(int(settings.MAX_OVERLAP_DURATION * settings.BASE_SAMPLE_RATE)).astype(np.float32)
-            self._recognizer.recognize([audio])
+            # Прогрев на каждом бакете длины: cuDNN/арена выделяются под эти формы
+            # на старте, и в рантайме (где вход паддится до тех же бакетов) холодного
+            # поиска алгоритмов нет. Пустой список бакетов -> старое поведение (30с).
+            warmup_secs = settings.ASR_PAD_BUCKETS_SEC or [settings.MAX_OVERLAP_DURATION]
+            for _sec in warmup_secs:
+                audio = np.random.randn(int(_sec * settings.BASE_SAMPLE_RATE)).astype(np.float32)
+                self._recognizer.recognize([audio])
         except Exception as e:
             logger.error("Ошибка при прогреве модели. Сервис работать не будет. Возможно, модель не поддерживает выбранный провайдер.")
         else:
-            logger.info(f"Успешно загружена ASR модель {self.model_name}. ")
+            logger.info(f"Успешно загружена ASR модель {self.model_name} (прогрев на бакетах {warmup_secs} сек). ")
 
     def __getattr__(self, name):
 
