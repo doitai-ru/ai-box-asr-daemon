@@ -7,6 +7,7 @@ from utils.resamppling import sync_resample_audiosegment
 from utils.slow_down_audio import do_slow_down_audio
 import logging
 from utils.chunk_doing import samples_padding
+from utils.audio_buckets import pad_to_bucket
 from dataclasses import asdict
 from onnx_asr.utils import read_wav_files, pad_list
 
@@ -49,9 +50,13 @@ def _simple_recognise_sync(audio_data, recognizer) -> dict:
 
     # Перевод в семплы для распознавания.
     samples = get_np_array_samples_float32(audio_data.raw_data, audio_data.sample_width)
-    result = asdict(recognizer.recognize(samples, sample_rate=settings.BASE_SAMPLE_RATE))
 
-    return result
+    # Бакет-паддинг: модель видит только фиксированные формы (на них же прогрев) ->
+    # нет холодного cuDNN-поиска и набора видеопамяти под новые размеры. Нарезку до
+    # <=30с по речи делает апстрим-VAD; хвостовой паддинг таймкоды не сдвигает.
+    samples = pad_to_bucket(samples, settings.BASE_SAMPLE_RATE, settings.ASR_PAD_BUCKETS_SEC)
+
+    return asdict(recognizer.recognize(samples, sample_rate=settings.BASE_SAMPLE_RATE))
 
 
 async def simple_recognise(audio_data, recognizer) -> dict:
