@@ -118,3 +118,12 @@ def test_gpu_profile_endpoint_enabled(monkeypatch):
     assert "snapshot" in res and "components" in res
     assert res["conns_by_path"] == {"tone": 2, "total": 2}
     assert "config" in res and "tone_infer_workers" in res["config"]
+
+
+def test_monitor_analyze_plateau_vs_growth():
+    from tools.gpu_monitor import analyze
+    plateau = analyze([100, 200, 300, 300, 300, 300])
+    assert plateau["max"] == 300
+    assert plateau["verdict"] == "plateau"
+    growth = analyze([100, 200, 300, 400, 500, 600])
+    assert growth["verdict"] == "growing"
