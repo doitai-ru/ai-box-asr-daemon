@@ -79,14 +79,16 @@ else
     done
 fi
 
-echo "== 5) tone из контейнера (запечён в образ) =="
+echo "== 5) Модель T-one =="
 if [ -e "$REPO/models/tone/model.onnx" ]; then
-    echo "  tone уже на месте"
-elif docker inspect "$CONTAINER" >/dev/null 2>&1; then
-    docker cp "$CONTAINER:/ASR_FastAPI_WS_RU/models/tone" "$REPO/models/tone"
+    echo "  tone уже в models/tone"
+elif ls -d "$DOCKER_MODELS"/hub/*T-one* >/dev/null 2>&1 || ls -d "$REPO"/models/hub/*T-one* >/dev/null 2>&1; then
+    echo "  T-one в HF-кэше (hub) — грузится через from_hugging_face, отдельный models/tone не нужен"
+elif docker inspect "$CONTAINER" >/dev/null 2>&1 && \
+     docker cp "$CONTAINER:/ASR_FastAPI_WS_RU/models/tone" "$REPO/models/tone" 2>/dev/null; then
     echo "  tone скопирован из контейнера"
 else
-    echo "  ВНИМАНИЕ: контейнер $CONTAINER недоступен — tone не скопирован (скачается из HF при старте)"
+    echo "  ВНИМАНИЕ: tone нет ни в models/tone, ни в hub — скачается из HF при первом старте (нужна сеть)"
 fi
 
 echo "== 5b) Лог-каталог =="
