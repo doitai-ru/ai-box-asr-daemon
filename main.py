@@ -19,6 +19,7 @@ from core.exception_handlers import register_exception_handlers
 from utils.files_whatcher import start_file_watcher
 from utils.pre_start_init import paths
 from utils.tone_stream import make_tone_executor
+from core import gpu_profiler
 import threading
 from VoiceActivityDetector import vad
 
@@ -118,6 +119,13 @@ async def lifespan(app):
         metrics_reporter_loop(app.state, interval_sec=30.0)
     )
 
+    # GPU-профилировщик (фон-сэмплер) — только при GPU_PROFILE
+    if settings.GPU_PROFILE:
+        app.state.gpu_profile_task = asyncio.create_task(
+            gpu_profiler.gpu_sampler_loop(app.state, interval_sec=1.0)
+        )
+        logger.info("GPU-профилировщик включён (сэмплер 1с -> logs/gpu_profile.jsonl)")
+
     # Настройка сборщика мусора.
     gc.set_threshold(500, 5, 5)
 
@@ -182,6 +190,13 @@ async def lifespan(app):
         app.state.metrics_task.cancel()
         try:
             await app.state.metrics_task
+        except asyncio.CancelledError:
+            pass
+
+    if hasattr(app.state, "gpu_profile_task"):
+        app.state.gpu_profile_task.cancel()
+        try:
+            await app.state.gpu_profile_task
         except asyncio.CancelledError:
             pass
 
