@@ -43,8 +43,12 @@ apt-get install -y build-essential cmake libboost-all-dev libeigen3-dev ffmpeg
 echo "== 3b) Доставляем наши зависимости поверх (onnxruntime-gpu не трогаем) =="
 "$VENV/bin/python" -m pip install --no-cache-dir -r "$REPO/requirements.txt"
 echo "== 3c) T-one стек (--no-deps, чтобы не затянуть CPU-onnxruntime поверх GPU) =="
-"$VENV/bin/python" -m pip install --no-cache-dir --no-deps "git+https://github.com/voicekit-team/T-one.git"
-"$VENV/bin/python" -m pip install --no-cache-dir pyctcdecode kenlm miniaudio
+# Версии запинены под те, что стоят в прод-образе asr-amulex (supply chain: фикс на
+# конкретный коммит T-one + точные версии пакетов; заодно точное воспроизведение прода).
+TONE_REF=3c5b6c015038173840e62cea99e10cdb1c759116
+"$VENV/bin/python" -m pip install --no-cache-dir --no-deps \
+    "git+https://github.com/voicekit-team/T-one.git@${TONE_REF}"
+"$VENV/bin/python" -m pip install --no-cache-dir "pyctcdecode==0.5.0" "kenlm==0.3.0" "miniaudio==1.71"
 
 echo "== 3d) Проверка стека =="
 "$VENV/bin/python" - <<'PY'
