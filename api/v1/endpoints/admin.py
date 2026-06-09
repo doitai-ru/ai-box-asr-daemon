@@ -4,10 +4,12 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config import settings
+from core import gpu_profiler
 from core.deps import get_current_user, require_admin, require_superadmin
 from core.security import create_access_token  # type: ignore[import-untyped]
 from db.models import ApiKey, ASRSession, Plan, Subscription, SystemLog, Transaction, User
@@ -39,6 +41,29 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 async def admin_metrics(current_user: User = Depends(require_admin)):
     """Текущие метрики системы (заглушка)."""
     return AdminMetricsResponse()
+
+
+@router.get("/gpu-profile")
+async def admin_gpu_profile(request: Request, current_user: User = Depends(require_admin)):
+    """Снимок GPU-профиля: память процесса, конкуренция по путям, бэклог, конфиг."""
+    if not gpu_profiler.enabled():
+        return {"enabled": False}
+    mgr = getattr(request.app.state, "ws_manager", None)
+    conns = mgr.counts_by_kind() if (mgr is not None and hasattr(mgr, "counts_by_kind")) else {}
+    return {
+        "enabled": True,
+        "snapshot": gpu_profiler.snapshot(),
+        "components": gpu_profiler.components(),
+        "conns_by_path": conns,
+        "tone_backlog": gpu_profiler.tone_backlog(),
+        "config": {
+            "provider": settings.PROVIDER,
+            "stream_with_gpu": settings.STREAM_WITH_GPU,
+            "tone_infer_workers": settings.TONE_INFER_WORKERS,
+            "asr_pad_buckets_sec": settings.ASR_PAD_BUCKETS_SEC,
+            "gpu_profile": settings.GPU_PROFILE,
+        },
+    }
 
 
 @router.get("/metrics/history")

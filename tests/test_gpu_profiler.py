@@ -86,3 +86,35 @@ def test_connection_manager_counts_by_kind():
     assert counts["giga"] == 1
     assert counts["tone"] == 2
     assert counts["total"] == 3
+
+
+def test_gpu_profile_endpoint_disabled(monkeypatch):
+    monkeypatch.setattr("config.settings.GPU_PROFILE", False)
+    from api.v1.endpoints.admin import admin_gpu_profile
+
+    class FakeReq:
+        class app:
+            class state:
+                ws_manager = None
+
+    res = asyncio.run(admin_gpu_profile(current_user=object(), request=FakeReq))
+    assert res == {"enabled": False}
+
+
+def test_gpu_profile_endpoint_enabled(monkeypatch):
+    monkeypatch.setattr("config.settings.GPU_PROFILE", True)
+    from api.v1.endpoints.admin import admin_gpu_profile
+
+    class FakeMgr:
+        def counts_by_kind(self): return {"tone": 2, "total": 2}
+
+    class FakeReq:
+        class app:
+            class state:
+                ws_manager = FakeMgr()
+
+    res = asyncio.run(admin_gpu_profile(current_user=object(), request=FakeReq))
+    assert res["enabled"] is True
+    assert "snapshot" in res and "components" in res
+    assert res["conns_by_path"] == {"tone": 2, "total": 2}
+    assert "config" in res and "tone_infer_workers" in res["config"]
