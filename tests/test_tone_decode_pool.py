@@ -35,3 +35,60 @@ def test_make_decode_pool_gate(monkeypatch):
     from Recognizer import tone_engine
     monkeypatch.setattr("config.settings.TONE_DECODE_PROCS", 0)
     assert tone_engine.make_decode_pool() is None     # 0 -> нет пула (фолбэк)
+
+
+class _FakeLPPhrase:
+    def __init__(self, logprobs, sf, ef):
+        self.logprobs = logprobs; self.start_frame = sf; self.end_frame = ef
+
+
+class _FakeModel:
+    def forward(self, audio_chunk, model_state):
+        return np.zeros((1, 4, 35), dtype=np.float32), "model_state2"
+
+
+class _FakeSplitter:
+    def forward(self, logprobs, logprob_state, is_last=False):
+        ph = _FakeLPPhrase(np.zeros((5, 35), dtype=np.float32), 10, 20)
+        return [ph], "splitter_state2"
+
+
+class _FakePipeline:
+    PADDING = 2400
+    def __init__(self):
+        self.model = _FakeModel(); self.logprob_splitter = _FakeSplitter()
+        self.decoder = self  # чтобы поймать, если decode позвали в стейдже A
+        self.decode_called = False
+    def forward(self, logprobs):  # decoder.forward — НЕ должен вызываться
+        self.decode_called = True; return "X"
+
+
+def test_forward_split_no_decode_and_state(monkeypatch):
+    from utils import tone_stream
+    from concurrent.futures import ThreadPoolExecutor
+    pipe = _FakePipeline()
+    ex = ThreadPoolExecutor(1)
+    try:
+        phrases, state = asyncio.run(
+            tone_stream.forward_split_async(ex, pipe, np.zeros(2400, dtype=np.int32), None, False))
+    finally:
+        ex.shutdown(wait=True)
+    assert pipe.decode_called is False              # декод НЕ в стейдже A
+    assert state == ("model_state2", "splitter_state2")
+    assert len(phrases) == 1
+    lp, start, end = phrases[0]
+    assert lp.shape == (5, 35)                       # logprobs фразы для отложенного декода
+    assert isinstance(start, float) and end >= start
+
+
+def test_decode_async_via_pool(monkeypatch):
+    from utils import tone_stream
+    from Recognizer import tone_engine
+    from concurrent.futures import ThreadPoolExecutor
+    monkeypatch.setattr(tone_engine, "_decode_worker", lambda lp, bw: f"text:{lp.shape[0]}:{bw}")
+    ex = ThreadPoolExecutor(2)
+    try:
+        txt = asyncio.run(tone_stream.decode_async(ex, np.zeros((7, 35), dtype=np.float32), 50))
+    finally:
+        ex.shutdown(wait=True)
+    assert txt == "text:7:50"
