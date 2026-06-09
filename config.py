@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     TONE_DECODE_PROCS: int = 6
     # Ширина луча beam-search (рычаг стоимости декода; в библиотеке tone захардкожено 200).
     TONE_BEAM_WIDTH: int = 200
+    # Грузить fp32-версию акустической модели T-one (models/tone_fp32/model.onnx).
+    # Исходная модель fp16 -> на CUDA даёт 38 Memcpy-нод (fp16<->fp32 Cast'ы уходят на CPU),
+    # GPU простаивает. fp32 убирает их (38->2). Дефолт вкл; фолбэк на штатную, если файла нет.
+    TONE_FP32: bool = True
     # GPU-профилировщик: при True включается фон-сэмплер NVML + инструментация
     # компонентов (профиль пишется в logs/gpu_profile.jsonl). По умолчанию выкл —
     # нулевые накладные. Включать только на расследование памяти.
@@ -163,6 +167,7 @@ class Settings(BaseSettings):
         'DIAR_WITH_GPU', 'DO_SPEED_SPEECH_CORRECTION',
         'DO_LOCAL_FILE_RECOGNITIONS', 'DELETE_LOCAL_FILE_AFTR_ASR',
         'HUMAN_FORMAT_MD_FILE', 'USE_TONE_STREAMING', 'STREAM_WITH_GPU', 'GPU_PROFILE',
+        'TONE_FP32',
         mode='before'
     )
     @classmethod

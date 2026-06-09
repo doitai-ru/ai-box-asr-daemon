@@ -5,6 +5,8 @@
 *.onnx
 *.m4a
 *.history.md
+# Исключение: fp32-модель T-one храним в git (см. tools/convert_tone_fp32.py, флаг TONE_FP32)
+!/models/tone_fp32/model.onnx
 /.venv/
 /venv/
 /models/vosk-model-ru/
