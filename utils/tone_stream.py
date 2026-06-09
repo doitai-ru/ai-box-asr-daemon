@@ -149,5 +149,5 @@ async def forward_async(executor, pipeline, samples, state, *, is_last: bool = F
 async def finalize_async(executor, pipeline, state):
     """Выполняет pipeline.finalize(state) в выделенном executor'е (вне event-loop'а)."""
     loop = asyncio.get_running_loop()
-    async with gpu_profiler.profile("tone", action="finalize"):
+    async with gpu_profiler.profile("tone", op="finalize"):
         return await loop.run_in_executor(executor, pipeline.finalize, state)
