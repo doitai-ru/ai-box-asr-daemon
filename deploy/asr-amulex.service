@@ -1,0 +1,39 @@
+[Unit]
+Description=ASR amulex (native, GPU) — gigaam-v3-rnnt + T-one + диаризация
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/asr-amulex-it
+
+# --- Прод-конфиг (снят с Docker-контейнера asr-amulex) ---
+Environment=HOST=0.0.0.0
+Environment=PORT=49153
+Environment=PROVIDER=CUDA
+Environment=MODEL_NAME=gigaam-v3-rnnt
+Environment=STREAM_WITH_GPU=1
+Environment=VAD_WITH_GPU=0
+Environment=PUNCTUATE_WITH_GPU=1
+Environment=CAN_DIAR=1
+Environment=DIAR_WITH_GPU=1
+Environment=MAX_OVERLAP_DURATION=25
+Environment=BETWEEN_WORDS_PERCENTILE=82
+Environment=IS_PROD=1
+Environment=LOGGING_LEVEL=INFO
+# Модели лежат в {repo}/models (HF_HOME -> сюда же); tone — в models/tone
+Environment=HF_HOME=/opt/asr-amulex-it/models
+Environment=TONE_DECODER=beam_search
+# GPU-профилировщик включён на бою (logs/gpu_profile.jsonl)
+Environment=GPU_PROFILE=1
+
+# Миграции БД на старте (идемпотентно, не блокируют ASR). PYTHONPATH= чтобы локальная
+# папка alembic/ не затеняла пакет alembic.
+ExecStartPre=/bin/sh -c 'cd /opt/asr-amulex-it && PYTHONPATH= /opt/asr-amulex-it/venv/bin/alembic upgrade head || echo "alembic upgrade skipped"'
+ExecStart=/opt/asr-amulex-it/venv/bin/python main.py
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
