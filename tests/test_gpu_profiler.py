@@ -50,3 +50,19 @@ def test_queue_backlog(monkeypatch):
     assert gp.tone_backlog() == 3
     gp.unregister_queue(q1)
     assert gp.tone_backlog() == 1
+
+
+def test_read_gpu_snapshot_no_nvml(monkeypatch):
+    # эмулируем отсутствие pynvml: read_gpu_snapshot не падает, поля None
+    import builtins
+    real_import = builtins.__import__
+
+    def fake_import(name, *a, **k):
+        if name == "pynvml":
+            raise ImportError("no pynvml")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    snap = gp.read_gpu_snapshot()
+    assert snap["process_gpu_mib"] is None
+    assert "updated_at" in snap and snap["updated_at"] > 0
