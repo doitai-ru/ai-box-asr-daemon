@@ -39,6 +39,7 @@ class ConnectionMeta:
     user_agent: Optional[str] = None
     subscribe_status: bool = False
     user_id: Optional[str] = None
+    kind: str = "generic"
 
 
 class ConnectionManager:
@@ -73,7 +74,16 @@ class ConnectionManager:
         """Текущее количество активных соединений."""
         return len(self.active_connections)
 
-    async def connect(self, websocket: WebSocket, client_id: str) -> bool:
+    def counts_by_kind(self) -> dict:
+        """Число активных соединений по путям (giga/tone/admin/generic) + total."""
+        out: dict = {}
+        for meta in self.connection_meta.values():
+            k = getattr(meta, "kind", "generic")
+            out[k] = out.get(k, 0) + 1
+        out["total"] = self.active_connections_count
+        return out
+
+    async def connect(self, websocket: WebSocket, client_id: str, kind: str = "generic") -> bool:
         """
         Принимает новое WebSocket-соединение.
 
@@ -92,7 +102,7 @@ class ConnectionManager:
 
         await websocket.accept()
         self.active_connections[client_id] = websocket
-        self.connection_meta[client_id] = ConnectionMeta()
+        self.connection_meta[client_id] = ConnectionMeta(kind=kind)
         logger.debug("Client %s connected. Total: %d", client_id, self.active_connections_count)
         return True
 

@@ -14,6 +14,7 @@ import time
 from umap import UMAP
 from hdbscan import HDBSCAN
 from utils.resamppling import async_resample_audiosegment
+from core import gpu_profiler
 import logging
 logger = logging.getLogger(__name__)
 
@@ -204,7 +205,8 @@ class Diarizer:
                     )
                     io_binding.bind_output('embs')
                     # Выполнение инференса
-                    self.embedding_session.run_with_iobinding(io_binding)
+                    with gpu_profiler.profile_block("diar", batch=int(batch.shape[0])):
+                        self.embedding_session.run_with_iobinding(io_binding)
 
                     return [io_binding.get_outputs()]  # Возвращаем список, чтобы соответствовать session.run
                 except Exception as e:

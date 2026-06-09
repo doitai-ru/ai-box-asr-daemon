@@ -8,6 +8,7 @@ from utils.slow_down_audio import do_slow_down_audio
 import logging
 from utils.chunk_doing import samples_padding
 from utils.audio_buckets import pad_to_bucket
+from core import gpu_profiler
 from dataclasses import asdict
 from onnx_asr.utils import read_wav_files, pad_list
 
@@ -56,7 +57,9 @@ def _simple_recognise_sync(audio_data, recognizer) -> dict:
     # <=30с по речи делает апстрим-VAD; хвостовой паддинг таймкоды не сдвигает.
     samples = pad_to_bucket(samples, settings.BASE_SAMPLE_RATE, settings.ASR_PAD_BUCKETS_SEC)
 
-    return asdict(recognizer.recognize(samples, sample_rate=settings.BASE_SAMPLE_RATE))
+    with gpu_profiler.profile_block("giga", samples=int(len(samples))):
+        result = asdict(recognizer.recognize(samples, sample_rate=settings.BASE_SAMPLE_RATE))
+    return result
 
 
 async def simple_recognise(audio_data, recognizer) -> dict:

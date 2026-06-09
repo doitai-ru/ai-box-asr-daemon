@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     # параллелизм beam-search всё равно ограничен GIL (честное масштабирование -
     # это мультипроцесс/процесс-на-карту, отдельный этап).
     TONE_INFER_WORKERS: int = 1
+    # GPU-профилировщик: при True включается фон-сэмплер NVML + инструментация
+    # компонентов (профиль пишется в logs/gpu_profile.jsonl). По умолчанию выкл —
+    # нулевые накладные. Включать только на расследование памяти.
+    GPU_PROFILE: bool = False
 
     # HuggingFace Hub settings
     HF_HOME: str = "./models"
@@ -151,7 +155,7 @@ class Settings(BaseSettings):
         'CAN_PUNCTUATE', 'PUNCTUATE_WITH_GPU', 'CAN_DIAR',
         'DIAR_WITH_GPU', 'DO_SPEED_SPEECH_CORRECTION',
         'DO_LOCAL_FILE_RECOGNITIONS', 'DELETE_LOCAL_FILE_AFTR_ASR',
-        'HUMAN_FORMAT_MD_FILE', 'USE_TONE_STREAMING', 'STREAM_WITH_GPU',
+        'HUMAN_FORMAT_MD_FILE', 'USE_TONE_STREAMING', 'STREAM_WITH_GPU', 'GPU_PROFILE',
         mode='before'
     )
     @classmethod

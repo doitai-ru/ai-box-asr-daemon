@@ -76,7 +76,7 @@ async def websocket_endpoint(
     logger.info("New WS connection: %s", client_id)
 
     # 1. Подключение (с проверкой лимита соединений)
-    if not await manager.connect(websocket, client_id):
+    if not await manager.connect(websocket, client_id, kind="giga"):
         logger.warning("Connection rejected for %s (max connections reached)", client_id)
         return
 
