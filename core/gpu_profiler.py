@@ -90,6 +90,7 @@ def profile_block(component: str, **fields):
     if not enabled():
         yield
         return
+    fields = {k: v for k, v in fields.items() if k not in ("component", "action")}  # не коллизим с record()
     record(component, "start", **fields)
     t0 = time.time()
     try:
@@ -104,6 +105,7 @@ async def profile(component: str, **fields):
     if not enabled():
         yield
         return
+    fields = {k: v for k, v in fields.items() if k not in ("component", "action")}  # не коллизим с record()
     record(component, "start", **fields)
     t0 = time.time()
     try:

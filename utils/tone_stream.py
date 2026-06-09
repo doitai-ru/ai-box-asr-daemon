@@ -151,3 +151,41 @@ async def finalize_async(executor, pipeline, state):
     loop = asyncio.get_running_loop()
     async with gpu_profiler.profile("tone", op="finalize"):
         return await loop.run_in_executor(executor, pipeline.finalize, state)
+
+
+def _forward_split(pipeline, samples, state, is_last):
+    """Стейдж A: model.forward + splitter.forward БЕЗ декода. Копия pipeline.forward
+    минус decoder.forward — возвращает (логпробы фразы, start, end) + новый state."""
+    from tone.onnx_wrapper import StreamingCTCModel
+    frame_size, time_bias = StreamingCTCModel.FRAME_SIZE, StreamingCTCModel.MEAN_TIME_BIAS
+    padding, sr = pipeline.PADDING, StreamingCTCModel.SAMPLE_RATE
+
+    model_state = state[0] if state is not None else None
+    logprob_state = state[1] if state is not None else None
+
+    logprobs, model_state_next = pipeline.model.forward(samples[None, :, None], model_state)
+    logprob_phrases, logprob_state_next = pipeline.logprob_splitter.forward(
+        logprobs[0], logprob_state, is_last=is_last)
+
+    out = []
+    for lp in logprob_phrases:
+        start = max(0.0, round(lp.start_frame * frame_size - time_bias - padding / sr, 2))
+        end = max(start, round(lp.end_frame * frame_size - time_bias - padding / sr, 2))
+        out.append((lp.logprobs, start, end))
+    return out, (model_state_next, logprob_state_next)
+
+
+async def forward_split_async(executor, pipeline, samples, state, is_last: bool = False):
+    """Стейдж A в tone_executor (GPU-акустика + нарезка, без декода)."""
+    loop = asyncio.get_running_loop()
+    async with gpu_profiler.profile("tone", n=int(len(samples)), is_last=bool(is_last)):
+        return await loop.run_in_executor(
+            executor, functools.partial(_forward_split, pipeline, samples, state, is_last))
+
+
+async def decode_async(pool, logprobs, beam_width: int):
+    """Стейдж B: декод одной фразы в process-пуле (или thread-пуле в тестах)."""
+    import Recognizer.tone_engine as te  # ссылка на воркер во время вызова (picklable + патчится)
+    loop = asyncio.get_running_loop()
+    async with gpu_profiler.profile("tone_decode", beam=int(beam_width)):
+        return await loop.run_in_executor(pool, te._decode_worker, logprobs, beam_width)

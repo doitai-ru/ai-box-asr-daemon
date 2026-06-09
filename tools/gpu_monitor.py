@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-Standalone-монитор GPU-профиля.
+Standalone-монитор GPU-профиля с пороговой сигнализацией.
 
-Опрашивает /api/v1/admin/gpu-profile (URL+токен) раз в N сек, пишет CSV и
-печатает таблицу; считает рост/плато по process_gpu_mib и корреляцию с
-конкуренцией. Альтернатива — тейл logs/gpu_profile.jsonl (--jsonl).
+Тейлит logs/gpu_profile.jsonl (--jsonl) ИЛИ опрашивает /api/v1/admin/gpu-profile
+(--url + --token) раз в N сек. Печатает статус-строку; при нарушении порогов —
+строку 'ALERT! ...' (мало свободной видеопамяти / устойчиво высокий бэклог T-one).
 
 Запуск:
-  python tools/gpu_monitor.py --url http://127.0.0.1:49153 --token <JWT> --interval 2 --csv /tmp/gpu.csv
-  python tools/gpu_monitor.py --jsonl logs/gpu_profile.jsonl
+  python tools/gpu_monitor.py --jsonl logs/gpu_profile.jsonl --interval 10 \
+      --mem-free-min 1024 --backlog-max 40 --backlog-hold 6
+  python tools/gpu_monitor.py --url http://127.0.0.1:49153 --token <JWT> --interval 10
 """
 
 import argparse
@@ -35,51 +36,78 @@ def _fetch(url: str, token: str) -> dict:
         return json.loads(r.read().decode("utf-8"))
 
 
+def _last_sample_from_jsonl(path: str) -> dict:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()[-400:]
+    except Exception:
+        return {}
+    for ln in reversed(lines):
+        try:
+            o = json.loads(ln)
+        except Exception:
+            continue
+        if o.get("kind") == "sample":
+            return o
+    return {}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url")
     ap.add_argument("--token", default="")
-    ap.add_argument("--interval", type=float, default=2.0)
-    ap.add_argument("--csv", default="")
     ap.add_argument("--jsonl", default="")
+    ap.add_argument("--interval", type=float, default=10.0)
+    ap.add_argument("--csv", default="")
+    ap.add_argument("--mem-free-min", type=int, default=1024, help="ALERT если свободно < N МиБ")
+    ap.add_argument("--backlog-max", type=int, default=40, help="порог бэклога T-one")
+    ap.add_argument("--backlog-hold", type=int, default=6, help="ALERT если бэклог > max подряд N раз")
     args = ap.parse_args()
 
     series = []
-    csv_f = open(args.csv, "w", encoding="utf-8") if args.csv else None
+    backlog_streak = 0
+    csv_f = open(args.csv, "a", encoding="utf-8") if args.csv else None
     if csv_f:
-        csv_f.write("ts,process_gpu_mib,gpu_used_mib,tone_backlog,conns_total\n")
+        csv_f.write("ts,process_gpu_mib,gpu_used_mib,gpu_free_mib,tone_backlog,conns_total,alert\n")
 
     try:
         while True:
+            pm = used = free = backlog = conns = None
             if args.url:
-                d = _fetch(args.url, args.token)
-                if not d.get("enabled"):
-                    print("GPU_PROFILE выключен на сервере"); return
-                snap = d.get("snapshot", {})
-                pm = snap.get("process_gpu_mib")
-                used = snap.get("gpu_used_mib")
-                backlog = d.get("tone_backlog")
-                conns = (d.get("conns_by_path") or {}).get("total")
-            else:
-                # тейл JSONL: последняя sample-строка
-                pm = used = backlog = conns = None
                 try:
-                    with open(args.jsonl, "r", encoding="utf-8") as f:
-                        lines = f.readlines()[-200:]
-                    for ln in reversed(lines):
-                        o = json.loads(ln)
-                        if o.get("kind") == "sample":
-                            pm = o.get("process_gpu_mib"); used = o.get("gpu_used_mib")
-                            backlog = o.get("tone_backlog")
-                            conns = (o.get("conns_by_path") or {}).get("total")
-                            break
-                except Exception:
-                    pass
+                    d = _fetch(args.url, args.token)
+                    if not d.get("enabled"):
+                        print("GPU_PROFILE выключен на сервере"); return
+                    s = d.get("snapshot", {}) or {}
+                    pm = s.get("process_gpu_mib"); used = s.get("gpu_used_mib"); free = s.get("gpu_free_mib")
+                    backlog = d.get("tone_backlog"); conns = (d.get("conns_by_path") or {}).get("total")
+                except Exception as e:
+                    print(f"{time.strftime('%H:%M:%S')} опрос не удался: {e}")
+                    time.sleep(args.interval); continue
+            else:
+                o = _last_sample_from_jsonl(args.jsonl)
+                pm = o.get("process_gpu_mib"); used = o.get("gpu_used_mib"); free = o.get("gpu_free_mib")
+                backlog = o.get("tone_backlog"); conns = (o.get("conns_by_path") or {}).get("total")
+
             series.append(pm)
             a = analyze(series)
-            print(f"proc={pm} used={used} backlog={backlog} conns={conns} | max={a['max']} verdict={a['verdict']}")
+
+            alerts = []
+            if free is not None and free < args.mem_free_min:
+                alerts.append(f"МАЛО ВИДЕОПАМЯТИ: свободно {free} МиБ < {args.mem_free_min}")
+            if backlog is not None and backlog > args.backlog_max:
+                backlog_streak += 1
+                if backlog_streak >= args.backlog_hold:
+                    alerts.append(f"БЭКЛОГ T-one {backlog} > {args.backlog_max} ({backlog_streak} подряд)")
+            else:
+                backlog_streak = 0
+
+            stamp = time.strftime("%H:%M:%S")
+            status = f"{stamp} proc={pm} used={used} free={free} backlog={backlog} conns={conns} | max={a['max']} {a['verdict']}"
+            line = ("ALERT! " + "; ".join(alerts) + " | " + status) if alerts else status
+            print(line, flush=True)
             if csv_f:
-                csv_f.write(f"{time.time()},{pm},{used},{backlog},{conns}\n"); csv_f.flush()
+                csv_f.write(f"{time.time()},{pm},{used},{free},{backlog},{conns},{int(bool(alerts))}\n"); csv_f.flush()
             time.sleep(args.interval)
     except KeyboardInterrupt:
         pass
