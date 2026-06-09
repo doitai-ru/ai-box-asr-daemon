@@ -18,6 +18,7 @@ import numpy as np
 import soxr
 
 from config import settings
+from core import gpu_profiler
 
 # Размер одного кадра T-one в байтах PCM16 (2 байта на семпл, моно)
 BYTES_PER_FRAME = settings.TONE_CHUNK_SAMPLES * 2
@@ -138,13 +139,15 @@ async def forward_async(executor, pipeline, samples, state, *, is_last: bool = F
     по очереди — порядок прокидывания state сохраняется.
     """
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        executor,
-        functools.partial(pipeline.forward, samples, state, is_last=is_last),
-    )
+    async with gpu_profiler.profile("tone", n=int(len(samples)), is_last=bool(is_last)):
+        return await loop.run_in_executor(
+            executor,
+            functools.partial(pipeline.forward, samples, state, is_last=is_last),
+        )
 
 
 async def finalize_async(executor, pipeline, state):
     """Выполняет pipeline.finalize(state) в выделенном executor'е (вне event-loop'а)."""
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(executor, pipeline.finalize, state)
+    async with gpu_profiler.profile("tone", action="finalize"):
+        return await loop.run_in_executor(executor, pipeline.finalize, state)

@@ -6,6 +6,7 @@ import onnxruntime as ort
 from pydub import AudioSegment
 from pathlib import Path
 from utils.resamppling import sync_resample_audiosegment
+from core import gpu_profiler
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,8 @@ class SileroVAD:
             'sr': np.array(object=sample_rate, dtype=np.int64)
         }
 
-        outputs = self.session.run(['output', 'stateN'], inputs)
+        with gpu_profiler.profile_block("vad", n=int(len(audio_frame))):
+            outputs = self.session.run(['output', 'stateN'], inputs)
         self.state = outputs[1]
         prob = float(outputs[0][0, 0])
 

@@ -33,6 +33,7 @@ from services.ws_manager import ConnectionManager
 from services.ws_protocol import detect
 from utils.tone_stream import take_frames, flush_tail, phrase_to_data, StreamResampler, forward_async, finalize_async
 from Recognizer.tone_engine import get_tone_pipeline
+from core import gpu_profiler
 
 router = APIRouter(prefix="/asr", tags=["ASR"])
 logger = logging.getLogger(__name__)
@@ -60,7 +61,7 @@ async def websocket_tone_stream(websocket: WebSocket):
     manager: ConnectionManager = websocket.app.state.ws_manager
     client_id = str(uuid.uuid4())
 
-    if not await manager.connect(websocket, client_id):
+    if not await manager.connect(websocket, client_id, kind="tone"):
         return  # лимит соединений исчерпан, ConnectionManager уже закрыл сокет
 
     # Предзагруженный в lifespan движок (готов сразу после старта); фолбэк - ленивая загрузка
@@ -68,6 +69,7 @@ async def websocket_tone_stream(websocket: WebSocket):
     executor = websocket.app.state.tone_executor
 
     audio_q: asyncio.Queue = asyncio.Queue()  # элементы (samples, is_last); None — сентинел конца
+    gpu_profiler.register_queue(audio_q)      # бэклог T-one для профиля
     send_lock = asyncio.Lock()                # сериализация отправки (reader-pong vs inferer-фразы)
     ctx = {"channel": "Null"}                 # channel_name, общий reader -> inferer
 
@@ -177,5 +179,6 @@ async def websocket_tone_stream(websocket: WebSocket):
     try:
         await asyncio.gather(reader(), inferer())
     finally:
+        gpu_profiler.unregister_queue(audio_q)
         await manager.disconnect(client_id)
         logger.info("[tone] closed %s (%s)", ctx["channel"], client_id)
