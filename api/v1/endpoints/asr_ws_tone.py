@@ -20,6 +20,7 @@ import asyncio
 import logging
 import uuid
 
+import numpy as np
 from fastapi import APIRouter, WebSocket
 
 from config import settings
@@ -31,12 +32,20 @@ from models.ws_models import (
 )
 from services.ws_manager import ConnectionManager
 from services.ws_protocol import detect
-from utils.tone_stream import take_frames, flush_tail, phrase_to_data, StreamResampler, forward_async, finalize_async
+from utils.tone_stream import (take_frames, flush_tail, phrase_to_data, StreamResampler,
+                               forward_async, finalize_async, forward_split_async, decode_async)
 from Recognizer.tone_engine import get_tone_pipeline
 from core import gpu_profiler
 
 router = APIRouter(prefix="/asr", tags=["ASR"])
 logger = logging.getLogger(__name__)
+
+
+class _Phrase:
+    """Лёгкая обёртка результата фразы из decode-пула (text/start_time/end_time как у TextPhrase)."""
+    __slots__ = ("text", "start_time", "end_time")
+    def __init__(self, text, start_time, end_time):
+        self.text = text; self.start_time = start_time; self.end_time = end_time
 
 
 def _result_message(phrase, channel_name: str, last: bool = False) -> WSResultMessage:
@@ -67,6 +76,8 @@ async def websocket_tone_stream(websocket: WebSocket):
     # Предзагруженный в lifespan движок (готов сразу после старта); фолбэк - ленивая загрузка
     pipeline = getattr(websocket.app.state, "tone_pipeline", None) or get_tone_pipeline()
     executor = websocket.app.state.tone_executor
+    decode_pool = getattr(websocket.app.state, "tone_decode_pool", None)  # None -> in-process (фолбэк)
+    beam_width = int(settings.TONE_BEAM_WIDTH)
 
     audio_q: asyncio.Queue = asyncio.Queue()  # элементы (samples, is_last); None — сентинел конца
     gpu_profiler.register_queue(audio_q)      # бэклог T-one для профиля
@@ -143,7 +154,14 @@ async def websocket_tone_stream(websocket: WebSocket):
                 break
             samples, is_last = item
             try:
-                phrases, state = await forward_async(executor, pipeline, samples, state, is_last=is_last)
+                if decode_pool is not None:
+                    raw, state = await forward_split_async(executor, pipeline, samples, state, is_last)
+                    phrases = []
+                    for logprobs, start, end in raw:                       # порядок сохраняем
+                        text = await decode_async(decode_pool, logprobs, beam_width)
+                        phrases.append(_Phrase(text, start, end))
+                else:
+                    phrases, state = await forward_async(executor, pipeline, samples, state, is_last=is_last)
             except Exception as exc:
                 logger.error("[tone] recognize error %s (%s): %s", ctx["channel"], client_id, exc)
                 continue
@@ -156,8 +174,16 @@ async def websocket_tone_stream(websocket: WebSocket):
 
         # --- финализация ---
         try:
-            fin_phrases, state = await finalize_async(executor, pipeline, state)
-            final_phrases.extend(fin_phrases)
+            if decode_pool is not None:
+                # finalize == forward(zeros, is_last=True); сплитим так же и декодим в пуле
+                raw, state = await forward_split_async(
+                    executor, pipeline, np.zeros(settings.TONE_CHUNK_SAMPLES, dtype=np.int32), state, True)
+                for logprobs, start, end in raw:
+                    text = await decode_async(decode_pool, logprobs, beam_width)
+                    final_phrases.append(_Phrase(text, start, end))
+            else:
+                fin_phrases, state = await finalize_async(executor, pipeline, state)
+                final_phrases.extend(fin_phrases)
         except Exception as exc:
             logger.error("[tone] finalize error %s (%s): %s", ctx["channel"], client_id, exc)
 
