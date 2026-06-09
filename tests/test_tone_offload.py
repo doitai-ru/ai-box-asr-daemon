@@ -131,7 +131,7 @@ def test_ws_stream_offloads_inference_via_executor(monkeypatch):
         def __init__(self):
             self.sent = []
 
-        async def connect(self, ws, cid):
+        async def connect(self, ws, cid, kind="generic"):
             return True
 
         async def send_message(self, cid, msg):
@@ -213,7 +213,7 @@ def test_ws_stream_answers_ping_while_inference_blocked(monkeypatch):
                 return await in_q.get()
 
         class FakeManager:
-            async def connect(self, ws, cid):
+            async def connect(self, ws, cid, kind="generic"):
                 return True
 
             async def send_message(self, cid, msg):

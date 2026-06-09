@@ -7,6 +7,7 @@ from transformers import AutoTokenizer
 import onnxruntime as ort
 from pathlib import Path
 import pynvml
+from core import gpu_profiler
 
 from typing import List
 logger = logging.getLogger(__name__)
@@ -141,13 +142,14 @@ class SbertPuncCaseOnnx:
 
         # Выполнение модели
         loop = asyncio.get_event_loop()
-        outputs = await loop.run_in_executor(
-            None,
-            lambda: self.session.run(None, {
-                "input_ids": input_ids,
-                "attention_mask": attention_mask,
-                "token_type_ids": token_type_ids,  # Передаём token_type_ids
-                        } ))
+        async with gpu_profiler.profile("punct", n=int(input_ids.shape[-1])):
+            outputs = await loop.run_in_executor(
+                None,
+                lambda: self.session.run(None, {
+                    "input_ids": input_ids,
+                    "attention_mask": attention_mask,
+                    "token_type_ids": token_type_ids,  # Передаём token_type_ids
+                            } ))
 
         predictions = np.argmax(outputs[0], axis=2)
 
