@@ -66,3 +66,23 @@ def test_read_gpu_snapshot_no_nvml(monkeypatch):
     snap = gp.read_gpu_snapshot()
     assert snap["process_gpu_mib"] is None
     assert "updated_at" in snap and snap["updated_at"] > 0
+
+
+def test_connection_manager_counts_by_kind():
+    from services.ws_manager import ConnectionManager
+
+    class FakeWS:
+        async def accept(self): pass
+        async def close(self, code=1000, reason=""): pass
+
+    async def go():
+        mgr = ConnectionManager(max_connections=10)
+        await mgr.connect(FakeWS(), "a", kind="giga")
+        await mgr.connect(FakeWS(), "b", kind="tone")
+        await mgr.connect(FakeWS(), "c", kind="tone")
+        return mgr.counts_by_kind()
+
+    counts = asyncio.run(go())
+    assert counts["giga"] == 1
+    assert counts["tone"] == 2
+    assert counts["total"] == 3
