@@ -80,3 +80,55 @@ def get_tone_pipeline():
         _pipeline = _build_pipeline()
         logger.info("Потоковая модель T-one загружена.")
     return _pipeline
+
+
+# --- decode-пул: kenlm beam-search в отдельных процессах (раздельные GIL) ---
+
+import glob
+from concurrent.futures import ProcessPoolExecutor
+
+_decode_pool = None
+_worker_decoder = None  # в каждом процессе пула
+
+
+def _kenlm_path() -> str | None:
+    """Путь до kenlm.bin: {HF_HOME}/tone/kenlm.bin, иначе из HF-кэша hub."""
+    direct = os.path.join(_model_dir(), "kenlm.bin")
+    if os.path.exists(direct):
+        return direct
+    hits = glob.glob(os.path.join(settings.HF_HOME, "hub", "models--t-tech--T-one",
+                                  "snapshots", "*", "kenlm.bin"))
+    return hits[0] if hits else None
+
+
+def _decode_pool_init(kenlm_path: str) -> None:
+    """initializer воркера: грузит beam-search декодер один раз (kenlm mmap-шарится)."""
+    global _worker_decoder
+    from tone.decoder import BeamSearchCTCDecoder
+    _worker_decoder = BeamSearchCTCDecoder.from_local(kenlm_path)
+
+
+def _decode_worker(logprobs, beam_width: int) -> str:
+    """Декод одной фразы в процессе пула (configurable beam_width поверх хардкода tone)."""
+    return _worker_decoder._decoder.decode(logprobs, beam_width=beam_width)
+
+
+def make_decode_pool():
+    """ProcessPoolExecutor под декод (или None при TONE_DECODE_PROCS<=0 / отсутствии kenlm)."""
+    procs = int(getattr(settings, "TONE_DECODE_PROCS", 0) or 0)
+    if procs <= 0:
+        return None
+    kpath = _kenlm_path()
+    if not kpath:
+        logger.warning("decode-пул выключен: kenlm.bin не найден")
+        return None
+    logger.info("T-one decode-пул: %s процессов (kenlm=%s)", procs, kpath)
+    return ProcessPoolExecutor(max_workers=procs, initializer=_decode_pool_init, initargs=(kpath,))
+
+
+def get_decode_pool():
+    """Ленивый синглтон decode-пула."""
+    global _decode_pool
+    if _decode_pool is None:
+        _decode_pool = make_decode_pool()
+    return _decode_pool
