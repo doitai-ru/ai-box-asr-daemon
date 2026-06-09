@@ -35,6 +35,16 @@ def _model_dir() -> str:
     return os.path.join(settings.HF_HOME, "tone")
 
 
+def _repo_dir() -> str:
+    """Корень репозитория (tone_engine.py лежит в {repo}/Recognizer/)."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _fp32_model_path() -> str:
+    """Путь до запечённой в git fp32-модели T-one (см. tools/convert_tone_fp32.py)."""
+    return os.path.join(_repo_dir(), "models", "tone_fp32", "model.onnx")
+
+
 def _build_pipeline():
     import onnxruntime as ort
     from tone import StreamingCTCPipeline, DecoderType
@@ -44,6 +54,29 @@ def _build_pipeline():
 
     greedy = str(settings.TONE_DECODER).lower() == "greedy"
     decoder_type = DecoderType.GREEDY if greedy else DecoderType.BEAM_SEARCH
+
+    # fp32-модель (TONE_FP32): убирает 38 Memcpy-нод на CUDA (fp16<->fp32 Cast'ы на CPU).
+    # Состояние модели тоже fp32 -> штатный StreamingCTCModel хардкодит fp16, поэтому сабкласс.
+    fp32_path = _fp32_model_path()
+    if getattr(settings, "TONE_FP32", False) and os.path.exists(fp32_path):
+        if settings.STREAM_WITH_GPU:
+            sess = ort.InferenceSession(fp32_path, providers=CUDA_PROVIDERS)
+        else:
+            sess = ort.InferenceSession(fp32_path)
+        logger.info("T-one fp32-модель: %s (провайдер %s)", fp32_path, sess.get_providers()[0])
+
+        class _FP32StreamingModel(StreamingCTCModel):
+            """state в fp32 (родитель хардкодит fp16): init нулями fp32, без fp16-проверки."""
+            def forward(self, audio_chunk, state):
+                if state is None:
+                    import numpy as _np
+                    state = _np.zeros((audio_chunk.shape[0], self.STATE_SIZE), dtype=_np.float32)
+                return self._ort_sess.run(None, {"signal": audio_chunk, "state": state})
+
+        model = _FP32StreamingModel(sess)
+        splitter = StreamingLogprobSplitter()
+        decoder = GreedyCTCDecoder() if greedy else BeamSearchCTCDecoder.from_local(_kenlm_path())
+        return StreamingCTCPipeline(model, splitter, decoder)
 
     model_dir = _model_dir()
     model_path = os.path.join(model_dir, "model.onnx")
