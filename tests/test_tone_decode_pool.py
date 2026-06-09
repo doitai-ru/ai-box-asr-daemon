@@ -11,7 +11,7 @@ import pytest
 def test_config_decode_pool_defaults():
     from config import Settings
     s = Settings()
-    assert s.TONE_DECODE_PROCS == 0      # дефолт: in-process (фолбэк)
+    assert s.TONE_DECODE_PROCS == 6      # дефолт: пул из 6 процессов (~10 соединений)
     assert s.TONE_BEAM_WIDTH == 200      # как в библиотеке tone
 
 
