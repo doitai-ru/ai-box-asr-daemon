@@ -175,6 +175,12 @@ async def lifespan(app):
     app.state.tone_executor = make_tone_executor(settings.TONE_INFER_WORKERS)
     logger.info("T-one executor создан (workers=%s)", settings.TONE_INFER_WORKERS)
 
+    # Пул процессов под kenlm beam-search декод (CPU+GIL-bound). None при TONE_DECODE_PROCS=0.
+    from Recognizer.tone_engine import make_decode_pool
+    app.state.tone_decode_pool = make_decode_pool()
+    if app.state.tone_decode_pool is not None:
+        logger.info("T-one decode-пул создан (procs=%s)", settings.TONE_DECODE_PROCS)
+
     if settings.DO_LOCAL_FILE_RECOGNITIONS:
         observer_thread = threading.Thread(
             target=lambda: start_file_watcher(file_path=str(paths.get("local_recognition_folder"))),
@@ -209,6 +215,11 @@ async def lifespan(app):
     if hasattr(app.state, "tone_executor"):
         app.state.tone_executor.shutdown(wait=True)
         logger.debug("T-one executor остановлен")
+
+    # Останавливаем decode-пул T-one (если был создан)
+    if getattr(app.state, "tone_decode_pool", None) is not None:
+        app.state.tone_decode_pool.shutdown(wait=False)
+        logger.debug("T-one decode-пул остановлен")
 
     # cleanup (если нужно)
     if hasattr(app.state, "recognizer"):
