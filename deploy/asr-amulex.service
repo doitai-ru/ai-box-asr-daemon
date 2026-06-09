@@ -24,6 +24,11 @@ Environment=LOGGING_LEVEL=INFO
 # Модели лежат в {repo}/models (HF_HOME -> сюда же); tone — в models/tone
 Environment=HF_HOME=/opt/asr-amulex-it/models
 Environment=TONE_DECODER=beam_search
+# T-one: пул процессов под kenlm-декод (стейдж B) + потоки под акустический forward (стейдж A).
+# Декод вынесен в пул (6 проц.), но боттлнек 12-14 стримов переехал на однопоточный forward —
+# поднимаем forward-воркеры до 6 (развязка reader/inferer защищает keepalive независимо от скорости).
+Environment=TONE_DECODE_PROCS=6
+Environment=TONE_INFER_WORKERS=6
 # GPU-профилировщик включён на бою (logs/gpu_profile.jsonl)
 Environment=GPU_PROFILE=1
 
