@@ -37,7 +37,9 @@ else
 fi
 
 echo "== 3) Сборочные зависимости для kenlm =="
-apt-get update -y
+# Терпим битые/недоступные сторонние репозитории (напр. устаревший локальный CUDA-репо):
+# нужные пакеты идут из штатных ubuntu-репозиториев, которые обновляются нормально.
+apt-get update -y || echo "apt-get update: часть репозиториев недоступна — продолжаем"
 apt-get install -y build-essential cmake libboost-all-dev libeigen3-dev ffmpeg
 
 echo "== 3b) Доставляем наши зависимости поверх (onnxruntime-gpu не трогаем) =="
