@@ -119,12 +119,13 @@ async def lifespan(app):
         metrics_reporter_loop(app.state, interval_sec=30.0)
     )
 
-    # GPU-профилировщик (фон-сэмплер) — только при GPU_PROFILE
-    if settings.GPU_PROFILE:
-        app.state.gpu_profile_task = asyncio.create_task(
-            gpu_profiler.gpu_sampler_loop(app.state, interval_sec=1.0)
-        )
-        logger.info("GPU-профилировщик включён (сэмплер 1с -> logs/gpu_profile.jsonl)")
+    # GPU-профилировщик: фон-сэмплер запускаем ВСЕГДА (при выключенном профайле он
+    # простаивает — без NVML/записи). Тумблится на лету через POST /api/v1/admin/gpu-profile.
+    app.state.gpu_profile_task = asyncio.create_task(
+        gpu_profiler.gpu_sampler_loop(app.state, interval_sec=1.0)
+    )
+    logger.info("GPU-профайлер: сэмплер запущен (старт %s; тумблер POST /api/v1/admin/gpu-profile)",
+                "включён" if gpu_profiler.enabled() else "выключен")
 
     # Настройка сборщика мусора.
     gc.set_threshold(500, 5, 5)

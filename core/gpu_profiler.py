@@ -28,16 +28,27 @@ _components = {}   # компонент -> {active, calls, last_action, last_ms}
 _queues = set()    # активные очереди (бэклог)
 _file_logger = None
 _nvml = {"inited": False, "handle": None}
+_override = {"value": None}  # рантайм-тумблер: None -> следуем settings.GPU_PROFILE
 
 
 def enabled() -> bool:
+    if _override["value"] is not None:
+        return _override["value"]
     return bool(getattr(settings, "GPU_PROFILE", False))
+
+
+def set_enabled(value: bool) -> bool:
+    """Включить/выключить профайлер на лету (без рестарта). Перебивает settings.GPU_PROFILE."""
+    _override["value"] = bool(value)
+    logger.info("GPU-профайлер %s (рантайм)", "включён" if _override["value"] else "выключен")
+    return _override["value"]
 
 
 def reset() -> None:
     """Сброс состояния (для тестов)."""
     _components.clear()
     _queues.clear()
+    _override["value"] = None
 
 
 def _get_file_logger():
@@ -177,14 +188,15 @@ async def gpu_sampler_loop(app_state, interval_sec: float = 1.0) -> None:
     import asyncio
     while True:
         try:
-            snap = read_gpu_snapshot()
-            _snapshot.update(snap)
-            conns = {}
-            mgr = getattr(app_state, "ws_manager", None)
-            if mgr is not None and hasattr(mgr, "counts_by_kind"):
-                conns = mgr.counts_by_kind()
-            _write({"ts": time.time(), "kind": "sample",
-                    "conns_by_path": conns, "tone_backlog": tone_backlog(), **snap})
+            if enabled():  # при выключенном профайле — простой цикл без NVML/записи
+                snap = read_gpu_snapshot()
+                _snapshot.update(snap)
+                conns = {}
+                mgr = getattr(app_state, "ws_manager", None)
+                if mgr is not None and hasattr(mgr, "counts_by_kind"):
+                    conns = mgr.counts_by_kind()
+                _write({"ts": time.time(), "kind": "sample",
+                        "conns_by_path": conns, "tone_backlog": tone_backlog(), **snap})
         except Exception:
             logger.warning("gpu_sampler_loop ошибка", exc_info=True)
         await asyncio.sleep(interval_sec)

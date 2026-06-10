@@ -29,8 +29,7 @@ Environment=TONE_DECODER=beam_search
 # поднимаем forward-воркеры до 6 (развязка reader/inferer защищает keepalive независимо от скорости).
 Environment=TONE_DECODE_PROCS=6
 Environment=TONE_INFER_WORKERS=6
-# GPU-профилировщик включён на бою (logs/gpu_profile.jsonl)
-Environment=GPU_PROFILE=1
+# GPU-профайлер дефолтно ВЫКЛ; включается на лету: POST /api/v1/admin/gpu-profile {"enabled":true}
 
 # Миграции БД на старте (идемпотентно, не блокируют ASR). PYTHONPATH= чтобы локальная
 # папка alembic/ не затеняла пакет alembic.
