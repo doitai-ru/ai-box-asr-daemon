@@ -217,10 +217,19 @@ async def lifespan(app):
         app.state.tone_executor.shutdown(wait=True)
         logger.debug("T-one executor остановлен")
 
-    # Останавливаем decode-пул T-one (если был создан)
-    if getattr(app.state, "tone_decode_pool", None) is not None:
-        app.state.tone_decode_pool.shutdown(wait=False)
-        logger.debug("T-one decode-пул остановлен")
+    # Останавливаем decode-пул T-one: форсированно гасим воркеры. shutdown(wait=False)
+    # шлёт сентинелы, но воркеры могут быть в долгом декоде/наследовать сигналы — поэтому
+    # дополнительно terminate() каждому процессу (теперь они реагируют на SIGTERM).
+    _pool = getattr(app.state, "tone_decode_pool", None)
+    if _pool is not None:
+        _procs = list(getattr(_pool, "_processes", {}).values())
+        _pool.shutdown(wait=False, cancel_futures=True)
+        for _p in _procs:
+            try:
+                _p.terminate()
+            except Exception:
+                pass
+        logger.debug("T-one decode-пул остановлен (воркеры терминированы: %d)", len(_procs))
 
     # cleanup (если нужно)
     if hasattr(app.state, "recognizer"):
