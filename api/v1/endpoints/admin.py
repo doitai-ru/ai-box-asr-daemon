@@ -66,6 +66,15 @@ async def admin_gpu_profile(request: Request, current_user: User = Depends(requi
     }
 
 
+@router.post("/gpu-profile")
+async def admin_gpu_profile_toggle(
+    payload: AdminMaintenanceToggle, current_user: User = Depends(require_admin)
+):
+    """Включить/выключить GPU-профайлер на лету (без рестарта службы)."""
+    is_on = gpu_profiler.set_enabled(payload.enabled)
+    return {"enabled": is_on, "detail": f"GPU-профайлер {'включён' if is_on else 'выключен'}"}
+
+
 @router.get("/metrics/history")
 async def admin_metrics_history(
     range: str = "24h",

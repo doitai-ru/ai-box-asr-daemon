@@ -120,6 +120,41 @@ def test_gpu_profile_endpoint_enabled(monkeypatch):
     assert "config" in res and "tone_infer_workers" in res["config"]
 
 
+def test_runtime_toggle_overrides_config(monkeypatch):
+    monkeypatch.setattr("config.settings.GPU_PROFILE", False)
+    assert gp.enabled() is False              # без оверрайда — следуем конфигу
+    gp.set_enabled(True)
+    assert gp.enabled() is True               # рантайм-тумблер перебивает конфиг
+    monkeypatch.setattr("config.settings.GPU_PROFILE", True)
+    gp.set_enabled(False)
+    assert gp.enabled() is False              # оверрайд держится даже при конфиге True
+    gp.reset()                                # сброс оверрайда -> снова конфиг
+    assert gp.enabled() is True
+
+
+def test_runtime_toggle_gates_recording(monkeypatch):
+    monkeypatch.setattr("config.settings.GPU_PROFILE", True)
+    gp.set_enabled(False)                     # выключили на лету
+    with gp.profile_block("vad", n=512):
+        pass
+    assert gp.components() == {}              # выкл -> ничего не пишем
+    gp.set_enabled(True)
+    with gp.profile_block("vad", n=512):
+        pass
+    assert gp.components()["vad"]["calls"] == 1
+
+
+def test_gpu_profile_toggle_endpoint():
+    from api.v1.endpoints.admin import admin_gpu_profile_toggle
+    from models.admin import AdminMaintenanceToggle
+    on = asyncio.run(admin_gpu_profile_toggle(
+        payload=AdminMaintenanceToggle(enabled=True), current_user=object()))
+    assert on["enabled"] is True and gp.enabled() is True
+    off = asyncio.run(admin_gpu_profile_toggle(
+        payload=AdminMaintenanceToggle(enabled=False), current_user=object()))
+    assert off["enabled"] is False and gp.enabled() is False
+
+
 def test_monitor_analyze_plateau_vs_growth():
     from tools.gpu_monitor import analyze
     plateau = analyze([100, 200, 300, 300, 300, 300])
