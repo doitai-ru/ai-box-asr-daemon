@@ -38,6 +38,9 @@ ExecStart=/opt/asr-amulex-it/venv/bin/python main.py
 
 Restart=always
 RestartSec=5
+# Бэкстоп: если процессы не погасли за 30с — systemd шлёт SIGKILL всему cgroup
+# (а не ждёт дефолтные 90с). Воркеры decode-пула гасятся раньше (сброс сигналов + terminate).
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target

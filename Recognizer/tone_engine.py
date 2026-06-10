@@ -135,7 +135,15 @@ def _kenlm_path() -> str | None:
 
 
 def _decode_pool_init(kenlm_path: str) -> None:
-    """initializer воркера: грузит beam-search декодер один раз (kenlm mmap-шарится)."""
+    """initializer воркера: сброс унаследованных сигналов + загрузка декодера.
+
+    Воркеры форкаются ПОСЛЕ того, как uvicorn поставил обработчик SIGTERM, и наследуют
+    его -> на рестарте игнорируют SIGTERM systemd и висят до SIGKILL (90с). Возвращаем
+    дефолтную диспозицию: SIGTERM -> терминация, SIGINT воркер игнорирует (Ctrl-C -> main).
+    """
+    import signal
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     global _worker_decoder
     from tone.decoder import BeamSearchCTCDecoder
     _worker_decoder = BeamSearchCTCDecoder.from_local(kenlm_path)

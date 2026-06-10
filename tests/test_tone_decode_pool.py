@@ -37,6 +37,24 @@ def test_make_decode_pool_gate(monkeypatch):
     assert tone_engine.make_decode_pool() is None     # 0 -> нет пула (фолбэк)
 
 
+def test_decode_pool_init_resets_signals(monkeypatch):
+    """Воркер форкается после uvicorn -> наследует SIGTERM-хендлер и висит на рестарте.
+    initializer должен вернуть SIGTERM->дефолт (умирать) и SIGINT->игнор."""
+    import signal
+    from Recognizer import tone_engine
+    monkeypatch.setattr("tone.decoder.BeamSearchCTCDecoder.from_local",
+                        staticmethod(lambda p: object()))
+    old_term, old_int = signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT)
+    try:
+        signal.signal(signal.SIGTERM, lambda *a: None)   # эмулируем унаследованный хендлер
+        tone_engine._decode_pool_init("/fake/kenlm.bin")
+        assert signal.getsignal(signal.SIGTERM) == signal.SIG_DFL   # умрёт по SIGTERM
+        assert signal.getsignal(signal.SIGINT) == signal.SIG_IGN
+    finally:
+        signal.signal(signal.SIGTERM, old_term)
+        signal.signal(signal.SIGINT, old_int)
+
+
 class _FakeLPPhrase:
     def __init__(self, logprobs, sf, ef):
         self.logprobs = logprobs; self.start_frame = sf; self.end_frame = ef
