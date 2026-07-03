@@ -13,7 +13,7 @@ Environment=PORT=49153
 Environment=PROVIDER=CUDA
 Environment=MODEL_NAME=gigaam-v3-rnnt
 Environment=STREAM_WITH_GPU=1
-Environment=VAD_WITH_GPU=0
+Environment=VAD_WITH_GPU=1
 Environment=PUNCTUATE_WITH_GPU=1
 Environment=CAN_DIAR=1
 Environment=DIAR_WITH_GPU=1
